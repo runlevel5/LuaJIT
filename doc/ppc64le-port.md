@@ -104,8 +104,13 @@ area, struct return, results in `r3`(`/r3:r4`) or `f1`. ELFv2 callback trampolin
 Endian-correct aggregate/byte handling for BE.
 
 ### E. DynASM — `dasm_ppc.lua` / `dasm_ppc.h`
-Verify `P64`; add missing ISA 3.0/3.1 ops, esp. **prefixed instructions**
-(`pli`/`paddi`/`pld`/`pstd`, 8-byte, must not span 64-byte boundaries); ELFv2 helpers.
+**Much smaller than first thought — see `ppc64-port-dynasm.md`.** DynASM is
+**build-time only** (assembles the interpreter; the JIT emits directly). Net: verify
+`P64`+endian assembly of the rewritten `vm_ppc.dasc`. ELFv2 linkage is handled by the
+assembler/linker (`buildvm` already emits `bl sym`; no function descriptors on non-PS3;
+no TOC data relocs needed). **ISA 3.1 prefixed instructions + their 64-byte-boundary
+guard live in the JIT emitter (`lj_emit_ppc.h`), not DynASM.** `.localentry` is
+optional/perf-only.
 
 ### F. Unwinding & tooling
 - `lj_err.c` external unwinding + `.eh_frame` for ELFv2 (LR = ra reg 65).
@@ -141,6 +146,33 @@ Verify `P64`; add missing ISA 3.0/3.1 ops, esp. **prefixed instructions**
 - Differential `-joff` vs `-jon` on every trace; PUC-Lua + LuaJIT test suites.
 - `-jdump`/`-jbc` audits enforce the quality bar.
 - QEMU (LE + BE) + FreeBSD for correctness gating; real POWER9/POWER10 for perf.
+
+## Reference implementations (consult when stuck — not as the template)
+
+Two prior community ports exist. Upstream criticized them for poor optimization /
+weak POWER understanding, so they are **not** the structural template (arm64 is). But
+they are valuable as a **correctness reference and problem-solver** for concrete
+subproblems — read how they solved a specific issue, then re-implement to the quality
+bar above (verify via `-jdump`), don't copy wholesale.
+
+- **PPC64/LuaJIT** — branch `ppc64-port`: https://github.com/PPC64/LuaJIT.git
+- **mwkmwkmwk/LuaJIT** — branch `ppc64-ffi`: https://github.com/mwkmwkmwk/LuaJIT.git
+
+Highest-value things to cross-check there when blocked (these are the fiddly, spec-
+ambiguous parts):
+- **ELFv2 FFI classification** (`lj_ccall.c`): HFA/HVA detection, small-struct-in-GPR
+  vs sret, vararg float shadowing — exact corner cases. (`ppc64-port-interp-abi.md` §5.)
+- **ELFv2 callback trampoline layout** (`lj_ccallback.c` `CALLBACK_MCODE_*`). (§6 there.)
+- **`vm_ppc.dasc` ELFv2 prologue / global-entry / r2 handling** and the
+  `lj_vm_ffi_call` marshalling.
+- **Unwinding / `.eh_frame`** for ELFv2 (`lj_err.c`, Phase 5.1) — easy to get subtly
+  wrong; see how they emit CFI.
+- **FP↔int and overflow idioms** — but here specifically check whether they used the
+  slow stack-bounce / `mcrxr` patterns this plan rejects (`ppc64-port-asm.md` §6/§7);
+  treat those as what *not* to do.
+
+Network access (WebFetch) is needed to read them; pull the relevant file only when a
+specific problem warrants it.
 
 ## Top risks
 1. GC64/FR2 correctness in the interpreter (Phase 1 — highest leverage).
