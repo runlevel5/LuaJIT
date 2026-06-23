@@ -366,8 +366,13 @@
 #define LJ_ARCH_PPC32ON64	1
 #define LJ_ARCH_NOFFI		1
 #elif LJ_ARCH_BITS == 64
-#error "No support for PPC64"
+#if defined(_CALL_ELF) && _CALL_ELF == 2
+/* PPC64 ELFv2 ABI (ppc64le, or ppc64 big-endian with ELFv2). GC64-only port. */
+#define LJ_TARGET_GC64		1
+#else
+#error "Only the PPC64 ELFv2 ABI is supported (ppc64le or ppc64 ELFv2)"
 #undef LJ_TARGET_PPC
+#endif
 #endif
 
 #if _ARCH_PWR7
