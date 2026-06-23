@@ -87,9 +87,9 @@ the existing file. Must implement:
 - Fast-function + helper coverage to pass the suite with `-joff`.
 
 ### C. JIT backend (bulk; Phase 2–3)
-- `lj_target_ppc.h`: 64-bit `ExitState.gpr`, **8-byte spill slots**
-  (`sps_scale` ×8; fix `SPS_FIXED`/offsets for ELFv2), ELFv2 reg ranges, exit-stub
-  addressing, optional VSX reg class for moves.
+- `lj_target_ppc.h`: `ExitState.gpr` is already 64-bit (`intptr_t`) and **spill slots
+  stay 32-bit/paired** (as arm64/mips64) — no widening. Reconcile `SPS_FIXED`/`SPS_FIRST`/
+  `SPOFS_*` with the new ELFv2 dasc frame; ELFv2 reg ranges; verify exit-stub addressing.
 - `lj_emit_ppc.h`: 64-bit emitters (`ld/std/ldx/stdx`, 64-bit arith, `cmpd/cmpld`,
   `rldic*`), `emit_loadk64`, large-displacement helpers, ELFv2-aware `emit_call`,
   ISA-tiered constant loader.
@@ -240,9 +240,9 @@ existing `ppc` files + `dasm_ppc.lua` are the POWER-instruction source.
 
 ## Phase 2 — JIT MVP (`lj_target_ppc.h`, `lj_emit_ppc.h`, `lj_asm_ppc.h`)
 
-- **2.1 Target GC64 update** — `lj_target_ppc.h`: widen `ExitState.gpr` to 64-bit,
-  **8-byte spill slots** (`sps_scale` ×8, fix `SPS_FIXED`/`SPOFS_*` for ELFv2 frame),
-  ELFv2 `REGARG_*`/scratch sets, `exitstub_trace_addr` for 64-bit, KREF range.
+- **2.1 Target GC64 update** — `lj_target_ppc.h`: `ExitState.gpr` already 64-bit; spill
+  slots **stay 32-bit/paired** (no change). Reconcile `SPS_FIXED`/`SPS_FIRST`/`SPOFS_*`
+  with the ELFv2 dasc frame, ELFv2 `REGARG_*`/scratch sets, `exitstub_trace_addr`.
 - **2.2 Core emitters** — `lj_emit_ppc.h`: `emit_loadk`/`emit_loadk64` (ISA-tiered
   constant loader), `emit_lso`/large-disp, `emit_loadofs`/`emit_storeofs`,
   `emit_call` (ELFv2 local-entry aware), `emit_kdelta`, immediate predicates

@@ -72,7 +72,7 @@ skeleton. Smallest viable set:
 
 | File | Phase 0 stub work |
 |------|-------------------|
-| `lj_target_ppc.h` | widen `ExitState.gpr` (auto via `intptr_t`/`_LP64`), set 8-byte spill (`sps_scale` ×8), keep reg map; this header must compile under GC64. |
+| `lj_target_ppc.h` | already 64-bit-clean (`intptr_t gpr[]`, 32-bit paired spill like arm64/mips64) — likely compiles as-is under GC64; reconcile `SPS_FIXED`/`SPOFS_*` with the dasc frame later. |
 | `lj_emit_ppc.h` | provide 64-bit `emit_loadi64`, `emit_loadofs/storeofs` (LD/STD), `emit_call`; can be partial — only what the asm skeleton references. |
 | `lj_asm_ppc.h` | every `asm_*` handler may be a `lj_assertA(0,"NYI")`/`lua_assert` stub **except** the scaffolding the trace compiler always calls (`asm_setup_target`, `asm_*_fixup`, `asm_exitstub_setup`, `asm_guardcc`, `asm_mcode_fixup`). Easiest: keep JIT effectively unused at first (traces won't form until `vm_ppc.dasc` hotcounters call in). |
 | `vm_ppc.dasc` | the long pole — but for *linking*, it must assemble. Start from a copy whose opcodes are `NYI` (`trap`) except the ELFv2 prologue, `lj_vm_call`/`vm_returnc`, and `ins_NEXT`, enough to run `print()` (see `ppc64-port-interp-abi.md` §8 milestone 1). DynASM must accept the 64-bit `.dasc`. |

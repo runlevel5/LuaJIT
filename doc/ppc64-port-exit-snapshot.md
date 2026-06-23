@@ -93,12 +93,13 @@ typedef struct {
   int32_t    spill[256];         /* spill slots — keep 32-bit elements */
 } ExitState;
 ```
-`intptr_t` already widens to 8 bytes under `_LP64`, so the struct is correct once the
-arch branch (Phase 0) sets `LJ_64`. **But the spill slots are now 8-byte** (see
-`lj_target_ppc.h` §2.1 `sps_scale` ×8) — `spill[]` is indexed in 32-bit units by
-`snap_restoredata`, so keep `int32_t spill[]` and index `spill[2*slot]` for 64-bit
-loads, matching how the assembler writes them. Verify against `snap_restoredata`
-(`lj_snap.c:767+`, reads `ex->spill` / `ex->fpr`).
+`intptr_t` already widens to 8 bytes under `_LP64`, so the struct is **already correct**
+— the existing `lj_target_ppc.h` `ExitState` needs no change. **Spill slots stay
+32-bit**, matching arm64/mips64 (`sps_scale = 4*slot`, `int32_t spill[256]`); a 64-bit
+value occupies an even/odd 32-bit pair. The existing ppc `sps_scale`/`sps_align` are
+already this convention — do **not** switch to 8-byte slots. Verify the assembler's
+spill writes and `snap_restoredata` (`lj_snap.c:767+`, reads `ex->spill`/`ex->fpr`)
+agree on the pair indexing.
 
 ---
 
@@ -199,7 +200,7 @@ This is architecture-neutral and already GC64-aware (it stores full `u64`). The 
 requirements PPC64 must meet:
 - `ex->gpr[]` elements are 64-bit (§3) so a tagged value / pointer round-trips intact.
 - Spill restore (`snap_restoredata`, `ex->spill`) indices match the assembler's
-  8-byte spill layout — verify the index scaling.
+  32-bit-slot (paired) spill layout — verify the pair index scaling.
 - FP register values stored as raw doubles by `stfd` in §4.
 No PPC-specific edits to `lj_snap.c` are expected; if any appear, they indicate a
 layout mismatch in §3/§4 to fix there, not in the generic code.

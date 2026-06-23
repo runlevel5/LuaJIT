@@ -366,16 +366,26 @@
 #define LJ_ARCH_PPC32ON64	1
 #define LJ_ARCH_NOFFI		1
 #elif LJ_ARCH_BITS == 64
-#if defined(_CALL_ELF) && _CALL_ELF == 2
-/* PPC64 ELFv2 ABI (ppc64le, or ppc64 big-endian with ELFv2). GC64-only port. */
-#define LJ_TARGET_GC64		1
-#else
+#if !(defined(_CALL_ELF) && _CALL_ELF == 2)
 #error "Only the PPC64 ELFv2 ABI is supported (ppc64le or ppc64 ELFv2)"
 #undef LJ_TARGET_PPC
+#elif LJ_ARCH_ENDIAN == LUAJIT_BE
+/* Big-endian ppc64 ELFv2 is planned but stubbed out for now; ppc64le only. */
+#error "PPC64 big-endian is not implemented yet -- build ppc64le for now"
+#undef LJ_TARGET_PPC
+#else
+/* PPC64 ELFv2 little-endian (ppc64le). GC64-only port. */
+#define LJ_TARGET_GC64		1
 #endif
 #endif
 
-#if _ARCH_PWR7
+#if _ARCH_PWR10
+#define LJ_ARCH_VERSION		100	/* ISA 3.1 (POWER10). */
+#elif _ARCH_PWR9
+#define LJ_ARCH_VERSION		90	/* ISA 3.0 (POWER9). */
+#elif _ARCH_PWR8
+#define LJ_ARCH_VERSION		80	/* ISA 2.07 baseline (POWER8). */
+#elif _ARCH_PWR7
 #define LJ_ARCH_VERSION		70
 #elif _ARCH_PWR6
 #define LJ_ARCH_VERSION		60
