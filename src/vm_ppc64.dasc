@@ -1387,32 +1387,26 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro .ffunc_n, name
   |->ff_ .. name:
   |  cmplwi NARGS8:RC, 8
-  |   lwz CARG1, 0(BASE)
-  |.if FPU
+  |   ld CARG1, 0(BASE)
   |    lfd FARG1, 0(BASE)
-  |.else
-  |    lwz CARG2, 4(BASE)
-  |.endif
   |  blt ->fff_fallback
-  |  checknum CARG1; bge ->fff_fallback
+  |  srdi TMP0, CARG1, 32
+  |  cmplw TMP0, TISNUMhi		// Only handle doubles inline (int->fallback).
+  |  bge ->fff_fallback
   |.endmacro
   |
   |.macro .ffunc_nn, name
   |->ff_ .. name:
   |  cmplwi NARGS8:RC, 16
-  |   lwz CARG1, 0(BASE)
-  |.if FPU
+  |   ld CARG1, 0(BASE)
   |    lfd FARG1, 0(BASE)
-  |   lwz CARG3, 8(BASE)
+  |   ld CARG3, 8(BASE)
   |    lfd FARG2, 8(BASE)
-  |.else
-  |    lwz CARG2, 4(BASE)
-  |   lwz CARG3, 8(BASE)
-  |    lwz CARG4, 12(BASE)
-  |.endif
   |  blt ->fff_fallback
-  |  checknum CARG1; bge ->fff_fallback
-  |  checknum CARG3; bge ->fff_fallback
+  |  srdi TMP0, CARG1, 32
+  |   srdi TMP1, CARG3, 32
+  |  cmplw TMP0, TISNUMhi; bge ->fff_fallback
+  |  cmplw TMP1, TISNUMhi; bge ->fff_fallback
   |.endmacro
   |
   |// Inlined GC threshold check. Caveat: uses TMP0 and TMP1.
@@ -2005,9 +1999,10 @@ static void build_subroutines(BuildCtx *ctx)
   |.endif
   |->fff_resi:
   |  lp PC, FRAME_PC(BASE)
-  |  la RA, -8(BASE)
-  |  stw TISNUM, -8(BASE)
-  |  stw CRET1, -4(BASE)
+  |  la RA, -16(BASE)			// GC64/FR2 result slot.
+  |  clrldi CRET1, CRET1, 32
+  |  add CRET1, CRET1, TISNUM		// Tag as integer TValue.
+  |  std CRET1, -16(BASE)
   |  b ->fff_res1
   |1:
   |  lus CARG3, 0x41e0	// 2^31.
@@ -2663,13 +2658,8 @@ static void build_subroutines(BuildCtx *ctx)
   |.endif
   |->fff_resn:
   |  lp PC, FRAME_PC(BASE)
-  |  la RA, -8(BASE)
-  |.if FPU
-  |  stfd FARG1, -8(BASE)
-  |.else
-  |  stw CARG1, -8(BASE)
-  |  stw CARG2, -4(BASE)
-  |.endif
+  |  la RA, -16(BASE)			// GC64/FR2 result slot.
+  |  stfd FARG1, -16(BASE)
   |  b ->fff_res1
   |
   |// Fallback FP number to bit conversion.
