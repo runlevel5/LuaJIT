@@ -5596,7 +5596,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // BASE = base, RA = resultptr, RD = (nresults+1)*8, PC = return
     |   lwz INS, -4(PC)
     |  cmpwi RD, 8
-    |   subi TMP2, BASE, 8
+    |   subi TMP2, BASE, 16
     |   subi RC, RD, 8
     |   decode_RB8 RB, INS
     |  beq >3
@@ -5674,7 +5674,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  bney ->BC_RETV_Z
     |
     |  lwz INS, -4(PC)
-    |   subi TMP2, BASE, 8
+    |   subi TMP2, BASE, 16
     |  decode_RB8 RB, INS
     if (op == BC_RET1) {
       |.if FPU
