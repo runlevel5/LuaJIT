@@ -1630,65 +1630,35 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.ffunc ipairs_aux
   |  cmplwi NARGS8:RC, 16
-  |   lwz CARG3, 0(BASE)
-  |    lwz TAB:CARG1, 4(BASE)
-  |   lwz CARG4, 8(BASE)
-  |.if DUALNUM
-  |    lwz TMP2, 12(BASE)
-  |.else
-  |    lfd FARG2, 8(BASE)
-  |.endif
+  |   ld CARG3, 0(BASE)			// State = table.
+  |   ld CARG4, 8(BASE)			// Control var = integer index.
   |  blt ->fff_fallback
-  |  checktab CARG3
-  |  checknum cr1, CARG4
+  |  sradi TMP0, CARG3, 47
+  |  rldicl TAB:CARG1, CARG3, 0, 17
+  |   srdi ITYPE, CARG4, 32
+  |  cmpdi TMP0, LJ_TTAB
+  |   cmplw cr1, ITYPE, TISNUMhi		// Index is an integer?
   |   lp PC, FRAME_PC(BASE)
-  |.if DUALNUM
   |  bne ->fff_fallback
   |  bne cr1, ->fff_fallback
-  |.else
-  |    lus TMP0, 0x3ff0
-  |    stw ZERO, TMPD_LO
-  |  bne ->fff_fallback
-  |    stw TMP0, TMPD_HI
-  |  bge cr1, ->fff_fallback
-  |    lfd FARG1, TMPD
-  |  toint TMP2, FARG2, f0
-  |.endif
+  |  extsw TMP2, CARG4			// Index value.
   |   lwz TMP0, TAB:CARG1->asize
-  |   lwz TMP1, TAB:CARG1->array
-  |.if not DUALNUM
-  |  fadd FARG2, FARG2, FARG1
-  |.endif
-  |  addi TMP2, TMP2, 1
-  |   la RA, -8(BASE)
+  |   lp TMP1, TAB:CARG1->array
+  |  addi TMP2, TMP2, 1			// i = index + 1.
+  |   la RA, -16(BASE)
+  |  clrldi TMP3, TMP2, 32
+  |  add TMP3, TMP3, TISNUM
+  |  std TMP3, 0(RA)			// Return integer key i.
   |  cmplw TMP0, TMP2
-  |.if DUALNUM
-  |  stw TISNUM, 0(RA)
   |   slwi TMP3, TMP2, 3
-  |  stw TMP2, 4(RA)
-  |.else
-  |   slwi TMP3, TMP2, 3
-  |  stfd FARG2, 0(RA)
-  |.endif
   |  ble >2				// Not in array part?
-  |.if FPU
-  |  lwzx TMP2, TMP1, TMP3
-  |  lfdx f0, TMP1, TMP3
-  |.else
-  |  lwzux TMP2, TMP1, TMP3
-  |  lwz TMP3, 4(TMP1)
-  |.endif
+  |  ldx TMP2, TMP1, TMP3
   |1:
-  |  checknil TMP2
+  |  cmpd TMP2, TISNIL
   |   li RD, (0+1)*8
   |  beq ->fff_res			// End of iteration, return 0 results.
   |   li RD, (2+1)*8
-  |.if FPU
-  |  stfd f0, 8(RA)
-  |.else
-  |  stw TMP2, 8(RA)
-  |  stw TMP3, 12(RA)
-  |.endif
+  |  std TMP2, 8(RA)			// Return value.
   |  b ->fff_res
   |2:  // Check for empty hash part first. Otherwise call C function.
   |  lwz TMP0, TAB:CARG1->hmask
@@ -1698,54 +1668,32 @@ static void build_subroutines(BuildCtx *ctx)
   |   mr CARG2, TMP2
   |  bl extern lj_tab_getinth		// (GCtab *t, int32_t key)
   |  // Returns cTValue * or NULL.
-  |  cmplwi CRET1, 0
+  |  cmpdi CRET1, 0
   |   li RD, (0+1)*8
   |  beq ->fff_res
-  |  lwz TMP2, 0(CRET1)
-  |.if FPU
-  |  lfd f0, 0(CRET1)
-  |.else
-  |  lwz TMP3, 4(CRET1)
-  |.endif
+  |  ld TMP2, 0(CRET1)			// Value TValue.
   |  b <1
   |
   |.ffunc_1 ipairs
-  |  checktab CARG3
+  |  sradi TMP0, CARG3, 47
+  |  cmpdi TMP0, LJ_TTAB
   |   lp PC, FRAME_PC(BASE)
   |  bne ->fff_fallback
 #if LJ_52
-  |   lwz TAB:TMP2, TAB:CARG1->metatable
-  |.if FPU
-  |  lfd f0, CFUNC:RB->upvalue[0]
-  |.else
-  |  lwz TMP0, CFUNC:RB->upvalue[0].u32.hi
-  |  lwz TMP1, CFUNC:RB->upvalue[0].u32.lo
-  |.endif
-  |   cmplwi TAB:TMP2, 0
-  |  la RA, -8(BASE)
+  |  rldicl TAB:CARG1, CARG3, 0, 17
+  |   lp TAB:TMP2, TAB:CARG1->metatable
+  |   ld TMP1, CFUNC:RB->upvalue[0]
+  |  la RA, -16(BASE)
+  |   cmpdi TAB:TMP2, 0
   |   bne ->fff_fallback
 #else
-  |.if FPU
-  |  lfd f0, CFUNC:RB->upvalue[0]
-  |.else
-  |  lwz TMP0, CFUNC:RB->upvalue[0].u32.hi
-  |  lwz TMP1, CFUNC:RB->upvalue[0].u32.lo
-  |.endif
-  |  la RA, -8(BASE)
+  |   ld TMP1, CFUNC:RB->upvalue[0]
+  |  la RA, -16(BASE)
 #endif
-  |.if DUALNUM
-  |  stw TISNUM, 8(BASE)
-  |.else
-  |  stw ZERO, 8(BASE)
-  |.endif
-  |   stw ZERO, 12(BASE)
+  |   std TISNUM, 16(RA)		// Control var = integer 0.
   |  li RD, (3+1)*8
-  |.if FPU
-  |  stfd f0, 0(RA)
-  |.else
-  |  stw TMP0, 0(RA)
-  |  stw TMP1, 4(RA)
-  |.endif
+  |   std CARG3, 8(RA)			// State = table.
+  |  std TMP1, 0(RA)			// Iterator = ipairs_aux.
   |  b ->fff_res
   |
   |//-- Base library: catch errors ----------------------------------------
