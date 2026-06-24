@@ -590,7 +590,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  addic. TMP1, RD, -8
   |   stp TMP2, L->base
   |   lwz TMP2, SAVE_NRES
-  |    subi BASE, BASE, 8
+  |    subi BASE, BASE, 16		// GC64/FR2: 2-slot frame.
   |    st_vmstate
   |   slwi TMP2, TMP2, 3
   |  beq >2
