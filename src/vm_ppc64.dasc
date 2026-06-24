@@ -362,17 +362,22 @@
 |
 |.if FPU
 |// int/FP conversions.
+|// GC64: convert int32/uint32 (low 32 of reg) to double via fcfid[u].
+|// No dependency on the TONUM/TOBIT magic-number constants (which the
+|// FR1 versions needed and which aren't reliably set on all paths).
+|// Clobbers reg (the FR1 versions did too), bounces through the TMPD slot.
 |.macro tonum_i, freg, reg
-|  xoris reg, reg, 0x8000
-|  stw reg, TONUM_LO
-|  lfd freg, TONUM_D
-|  fsub freg, freg, TONUM
+|  extsw reg, reg
+|  std reg, TMPD
+|  lfd freg, TMPD
+|  fcfid freg, freg
 |.endmacro
 |
 |.macro tonum_u, freg, reg
-|  stw reg, TONUM_LO
-|  lfd freg, TONUM_D
-|  fsub freg, freg, TOBIT
+|  clrldi reg, reg, 32
+|  std reg, TMPD
+|  lfd freg, TMPD
+|  fcfidu freg, freg
 |.endmacro
 |
 |.macro toint, reg, freg, tmpfreg
