@@ -4074,32 +4074,32 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     ||vk = ((int)op - BC_ADDVN) / (BC_ADDNV-BC_ADDVN);
     ||switch (vk) {
     ||case 0:
-    |   lwzux CARG1, RB, BASE
-    |   lwzux CARG3, RC, KBASE
-    |    lwz CARG2, 4(RB)
-    |   checknum cr0, CARG1
-    |    lwz CARG4, 4(RC)
-    |   checknum cr1, CARG3
+    |   add RB, RB, BASE
+    |   add RC, RC, KBASE
+    |   ld CARG2, 0(RB)			// src1 = var.
+    |   ld CARG4, 0(RC)			// src2 = num const.
     ||  break;
     ||case 1:
-    |   lwzux CARG3, RB, BASE
-    |   lwzux CARG1, RC, KBASE
-    |    lwz CARG4, 4(RB)
-    |   checknum cr0, CARG3
-    |    lwz CARG2, 4(RC)
-    |   checknum cr1, CARG1
+    |   add RB, RB, BASE
+    |   add RC, RC, KBASE
+    |   ld CARG2, 0(RC)			// src1 = num const.
+    |   ld CARG4, 0(RB)			// src2 = var.
     ||  break;
     ||default:
-    |   lwzux CARG1, RB, BASE
-    |   lwzux CARG3, RC, BASE
-    |    lwz CARG2, 4(RB)
-    |   checknum cr0, CARG1
-    |    lwz CARG4, 4(RC)
-    |   checknum cr1, CARG3
+    |   add RB, RB, BASE
+    |   add RC, RC, BASE
+    |   ld CARG2, 0(RB)
+    |   ld CARG4, 0(RC)
     ||  break;
     ||}
-    |  bne >5
+    |  srdi TMP2, CARG2, 32
+    |  srdi TMP3, CARG4, 32
+    |  cmplw cr0, TMP2, TISNUMhi
+    |  cmplw cr1, TMP3, TISNUMhi
+    |  bne cr0, >5
     |  bne cr1, >5
+    |  extsw CARG2, CARG2			// src1 value.
+    |  extsw CARG4, CARG4			// src2 value.
     |.if "intins" == "intmod"
     |  mr CARG1, CARG2
     |  mr CARG2, CARG4
@@ -4107,41 +4107,30 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  intins CARG1, CARG2, CARG4
     |  bso >4
     |1:
+    |  clrldi CARG1, CARG1, 32
+    |  add CARG1, CARG1, TISNUM		// GC64: tag integer result.
     |  ins_next1
-    |  stwux TISNUM, RA, BASE
-    |  stw CARG1, 4(RA)
+    |  stdux CARG1, RA, BASE
     |2:
     |  ins_next2
     |4:  // Overflow.
     |  checkov TMP0, <1			// Ignore unrelated overflow.
     |  ins_arithfallback b
     |5:  // FP variant.
-    |.if FPU
     ||if (vk == 1) {
-    |  lfd f15, 0(RB)
     |  lfd f14, 0(RC)
+    |  lfd f15, 0(RB)
     ||} else {
     |  lfd f14, 0(RB)
     |  lfd f15, 0(RC)
     ||}
-    |.endif
     |  crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
     |   ins_arithfallback bge
     |.if "fpins" == "fpmod_"
     |  b ->BC_MODVN_Z			// Avoid 3 copies. It's slow anyway.
     |.else
-    |.if FPU
     |  fpins f0, f14, f15
     |  stfdx f0, BASE, RA
-    |.else
-    |.if "fpcall" == "sfpmod"
-    |  sfpmod
-    |.else
-    |  blex fpcall
-    |.endif
-    |  stwux CRET1, RA, BASE
-    |  stw CRET2, 4(RA)
-    |.endif
     |  ins_next1
     |  b <2
     |.endif
