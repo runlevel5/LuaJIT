@@ -1369,7 +1369,8 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro .ffunc_1, name
   |->ff_ .. name:
   |  cmplwi NARGS8:RC, 8
-  |   ld CARG3, 0(BASE)			// GC64: arg1 = full TValue.
+  |   ld CARG3, 0(BASE)			// GC64: arg1 = full TValue (for type checks).
+  |   rldicl CARG1, CARG3, 0, 17		// GC64: arg1 masked GC pointer (for obj args).
   |  blt ->fff_fallback
   |.endmacro
   |
@@ -1419,30 +1420,25 @@ static void build_subroutines(BuildCtx *ctx)
   |//-- Base library: checks -----------------------------------------------
   |
   |.ffunc_1 assert
-  |  li TMP1, LJ_TFALSE
-  |   la RA, -8(BASE)
-  |  cmplw cr1, CARG3, TMP1
+  |  li TMP1, 1
+  |  sldi TMP1, TMP1, 47
+  |  not TMP1, TMP1			// GC64: mov_false = ~(1<<47).
+  |   la RA, -16(BASE)
+  |  cmpld cr1, CARG3, TMP1		// Truthy iff arg1 < ~(1<<47).
   |    lp PC, FRAME_PC(BASE)
   |  bge cr1, ->fff_fallback
-  |   stw CARG3, 0(RA)
-  |  addi RD, NARGS8:RC, 8		// Compute (nresults+1)*8.
-  |  addi TMP1, BASE, 8
-  |  add TMP2, RA, NARGS8:RC
-  |   stw CARG1, 4(RA)
+  |   std CARG3, 0(RA)			// Return first arg (the value).
+  |  subi TMP2, NARGS8:RC, 8		// Remaining args after the 1st.
+  |   addi RD, NARGS8:RC, 8		// Compute (nresults+1)*8.
+  |  cmpdi TMP2, 0
+  |   mr TMP1, RA
   |  beq ->fff_res			// Done if exactly 1 argument.
-  |1:
-  |  cmplw TMP1, TMP2
-  |.if FPU
-  |   lfd f0, 0(TMP1)
-  |   stfd f0, 0(TMP1)
-  |.else
-  |   lwz CARG1, 0(TMP1)
-  |   lwz CARG2, 4(TMP1)
-  |   stw CARG1, -8(TMP1)
-  |   stw CARG2, -4(TMP1)
-  |.endif
-  |    addi TMP1, TMP1, 8
-  |  bney <1
+  |1:  // Shift remaining args down to results (FR2: 2-slot gap).
+  |  ld CARG3, 24(TMP1)
+  |  subi TMP2, TMP2, 8
+  |   stdu CARG3, 8(TMP1)
+  |  cmpdi TMP2, 0
+  |  bne <1
   |  b ->fff_res
   |
   |.ffunc type
@@ -1464,52 +1460,59 @@ static void build_subroutines(BuildCtx *ctx)
   |//-- Base library: getters and setters ---------------------------------
   |
   |.ffunc_1 getmetatable
-  |  checktab CARG3; bne >6
+  |  // CARG3 = arg TValue, CARG1 = masked GC pointer (from .ffunc_1).
+  |  sradi ITYPE, CARG3, 47
+  |  cmpdi ITYPE, LJ_TTAB
+  |  beq >1
+  |  cmpdi ITYPE, LJ_TUDATA
+  |  bne >6
   |1:  // Field metatable must be at same offset for GCtab and GCudata!
-  |  lwz TAB:CARG1, TAB:CARG1->metatable
+  |  lp TAB:RB, TAB:CARG1->metatable
   |2:
-  |  li CARG3, LJ_TNIL
-  |   cmplwi TAB:CARG1, 0
-  |  lwz STR:RC, DISPATCH_GL(gcroot[GCROOT_MMNAME+MM_metatable])(DISPATCH)
+  |  li CARG3, LJ_TNIL			// Default result: nil (no metatable).
+  |   cmpdi TAB:RB, 0
+  |  lp STR:RC, DISPATCH_GL(gcroot[GCROOT_MMNAME+MM_metatable])(DISPATCH)
   |   beq ->fff_restv
-  |  lwz TMP0, TAB:CARG1->hmask
-  |   li CARG3, LJ_TTAB			// Use metatable as default result.
+  |  lwz TMP0, TAB:RB->hmask
   |  lwz TMP1, STR:RC->sid
-  |  lwz NODE:TMP2, TAB:CARG1->node
+  |  lp NODE:TMP2, TAB:RB->node
   |  and TMP1, TMP1, TMP0		// idx = str->sid & tab->hmask
   |  slwi TMP0, TMP1, 5
   |  slwi TMP1, TMP1, 3
   |  sub TMP1, TMP0, TMP1
-  |  add NODE:TMP2, NODE:TMP2, TMP1	// node = tab->node + (idx*32-idx*8)
+  |  add NODE:TMP2, NODE:TMP2, TMP1	// node = tab->node + idx*24
+  |  li ITYPE, LJ_TTAB
+  |  sldi ITYPE, ITYPE, 47
+  |  or CARG3, TAB:RB, ITYPE		// Default result: the metatable (tagged).
   |3:  // Rearranged logic, because we expect _not_ to find the key.
-  |  lwz CARG4, NODE:TMP2->key
-  |   lwz TMP0, 4+offsetof(Node, key)(NODE:TMP2)
-  |    lwz CARG2, NODE:TMP2->val
-  |     lwz TMP1, 4+offsetof(Node, val)(NODE:TMP2)
-  |  checkstr CARG4; bne >4
-  |   cmpw TMP0, STR:RC; beq >5
+  |  ld CARG4, NODE:TMP2->key
+  |   ld CARG2, NODE:TMP2->val
+  |  sradi ITYPE, CARG4, 47
+  |  cmpdi ITYPE, LJ_TSTR
+  |  bne >4
+  |  rldicl TMP0, CARG4, 0, 17		// Key string pointer.
+  |  cmpd TMP0, STR:RC; beq >5
   |4:
-  |  lwz NODE:TMP2, NODE:TMP2->next
-  |  cmplwi NODE:TMP2, 0
+  |  lp NODE:TMP2, NODE:TMP2->next
+  |  cmpdi NODE:TMP2, 0
   |  beq ->fff_restv			// Not found, keep default result.
   |  b <3
   |5:
-  |  checknil CARG2
+  |  cmpd CARG2, TISNIL
   |  beq ->fff_restv			// Ditto for nil value.
   |  mr CARG3, CARG2			// Return value of mt.__metatable.
-  |  mr CARG1, TMP1
   |  b ->fff_restv
   |
-  |6:
-  |  cmpwi CARG3, LJ_TUDATA; beq <1
-  |  .gpr64 extsw CARG3, CARG3
-  |  subfc TMP0, TISNUM, CARG3
-  |  subfe TMP2, CARG3, CARG3
-  |  orc TMP1, TMP2, TMP0
-  |  addi TMP1, TMP1, ~LJ_TISNUM+1
-  |  slwi TMP1, TMP1, 2
-  |   la TMP2, DISPATCH_GL(gcroot[GCROOT_BASEMT])(DISPATCH)
-  |  lwzx TAB:CARG1, TMP2, TMP1
+  |6:  // Not a table/userdata: get the per-type base metatable.
+  |  li TMP0, LJ_TISNUM
+  |  cmpld ITYPE, TMP0
+  |  bge >7
+  |  mr ITYPE, TMP0			// Numbers share the LJ_TISNUM base metatable.
+  |7:
+  |  not TMP1, ITYPE			// Base metatable index = ~itype.
+  |  sldi TMP1, TMP1, 3
+  |  la TMP2, DISPATCH_GL(gcroot[GCROOT_BASEMT])(DISPATCH)
+  |  ldx TAB:RB, TMP2, TMP1
   |  b <2
   |
   |.ffunc_2 setmetatable
