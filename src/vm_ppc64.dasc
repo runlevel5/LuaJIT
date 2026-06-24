@@ -4318,20 +4318,12 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = dst*8, RD = uvnum*8
     |  lp LFUNC:RB, FRAME_FUNC(BASE)
     |  rldicl RB, RB, 0, 17
-    |   srwi RD, RD, 1
     |   addi RD, RD, offsetof(GCfuncL, uvptr)
-    |  lwzx UPVAL:RB, LFUNC:RB, RD
+    |  ldx UPVAL:RB, LFUNC:RB, RD		// GC64: uvnum*8 + offset.
     |  ins_next1
-    |  lwz TMP1, UPVAL:RB->v
-    |.if FPU
-    |  lfd f0, 0(TMP1)
-    |  stfdx f0, BASE, RA
-    |.else
-    |  lwz TMP2, 0(TMP1)
-    |  lwz TMP3, 4(TMP1)
-    |  stwux TMP2, RA, BASE
-    |  stw TMP3, 4(RA)
-    |.endif
+    |  lp TMP1, UPVAL:RB->v
+    |  ld TMP2, 0(TMP1)
+    |  stdux TMP2, RA, BASE
     |  ins_next2
     break;
   case BC_USETV:
