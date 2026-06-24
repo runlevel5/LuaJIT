@@ -210,7 +210,10 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK };  /* Special continuations. */
 #define CFRAME_OFS_MULTRES	408
 #define CFRAME_SIZE		384
 #define CFRAME_SHIFT_MULTRES	3
-#elif LJ_ARCH_PPC32ON64
+#elif LJ_ARCH_PPC32ON64 || LJ_64
+/* PPC64 ELFv2 (ppc64le) and PS3 use the GPR64 (non-FRAME32) C frame layout.
+** Must match the GPR64 stack layout in vm_ppc.dasc (CFRAME_SPACE = 400).
+*/
 #define CFRAME_OFS_ERRF		472
 #define CFRAME_OFS_NRES		468
 #define CFRAME_OFS_PREV		448
