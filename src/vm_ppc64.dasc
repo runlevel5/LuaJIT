@@ -1726,40 +1726,29 @@ static void build_subroutines(BuildCtx *ctx)
   |  b ->vm_call_dispatch
   |
   |.ffunc xpcall
-  |     lwz TMP1, L->maxstack
-  |     add TMP2, BASE, NARGS8:RC
+  |  lwz TMP1, L->maxstack
+  |   add TMP2, BASE, NARGS8:RC
   |  cmplwi NARGS8:RC, 16
-  |   lwz CARG3, 8(BASE)
-  |     cmplw cr1, TMP1, TMP2
-  |.if FPU
-  |    lfd FARG2, 8(BASE)
+  |   ld CARG1, 0(BASE)			// Function f.
+  |   cmplw cr1, TMP1, TMP2
+  |   ld CARG3, 8(BASE)			// Traceback handler.
   |  cror 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
-  |    lfd FARG1, 0(BASE)
-  |.else
-  |    lwz CARG1, 0(BASE)
-  |    lwz CARG2, 4(BASE)
-  |  cror 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
-  |    lwz CARG4, 12(BASE)
-  |.endif
   |  blt ->fff_fallback
-  |  lbz TMP1, DISPATCH_GL(hookmask)(DISPATCH)
+  |  sradi TMP0, CARG3, 47
+  |  cmpdi TMP0, LJ_TFUNC
+  |   lbz TMP1, DISPATCH_GL(hookmask)(DISPATCH)
   |   mr TMP2, BASE
-  |  checkfunc CARG3; bne ->fff_fallback  // Traceback must be a function.
-  |   la BASE, 16(BASE)
+  |  bne ->fff_fallback			// Traceback must be a function.
+  |   la BASE, 24(BASE)			// GC64/FR2: skip 3 frame slots.
   |  // Remember active hook before pcall.
   |  rlwinm TMP1, TMP1, 32-HOOK_ACTIVE_SHIFT, 31, 31
-  |.if FPU
-  |    stfd FARG2, 0(TMP2)		// Swap function and traceback.
-  |    stfd FARG1, 8(TMP2)
-  |.else
-  |    stw CARG3, 0(TMP2)
-  |    stw CARG4, 4(TMP2)
-  |    stw CARG1, 8(TMP2)
-  |    stw CARG2, 12(TMP2)
-  |.endif
+  |   std CARG3, 0(TMP2)		// Swap function and traceback.
+  |   std CARG1, 8(TMP2)
   |  subi NARGS8:RC, NARGS8:RC, 16
-  |  addi PC, TMP1, 16+FRAME_PCALL
-  |  b ->vm_call_dispatch
+  |  addi PC, TMP1, 24+FRAME_PCALL
+  |  cmpdi NARGS8:RC, 0
+  |  beq ->vm_call_dispatch		// No extra args: dispatch directly.
+  |  b <1				// FR2: shift extra args down by 8 (pcall loop).
   |
   |//-- Coroutine library --------------------------------------------------
   |
