@@ -3754,27 +3754,26 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_ISEQS: case BC_ISNES:
     vk = op == BC_ISEQS;
     |  // RA = src*8, RD = str_const*8 (~), JMP with RD = target
-    |  lwzux TMP0, RA, BASE
-    |   srwi RD, RD, 1
-    |  lwz STR:TMP3, 4(RA)
+    |  ldx CARG1, BASE, RA		// GC64: src TValue.
+    |   subfic TMP1, RD, -8		// -(str_const+1)*8
     |    lwz TMP2, 0(PC)
-    |   subfic RD, RD, -4
     |    addi PC, PC, 4
+    |  ldx STR:TMP3, KBASE, TMP1	// String const (raw GCRef ptr).
+    |   li TMP0, LJ_TSTR
+    |   sldi TMP0, TMP0, 47
     |.if FFI
-    |  cmpwi TMP0, LJ_TCDATA
+    |  sradi CARG2, CARG1, 47
     |.endif
-    |   lwzx STR:TMP1, KBASE, RD	// KBASE-4-str_const*4
-    |  .gpr64 extsw TMP0, TMP0
-    |  subfic TMP0, TMP0, LJ_TSTR
+    |  or STR:TMP3, STR:TMP3, TMP0	// Tagged string TValue.
     |.if FFI
+    |  cmpdi CARG2, LJ_TCDATA
     |  beq ->vmeta_equal_cd
     |.endif
-    |  sub TMP1, STR:TMP1, STR:TMP3
-    |  or TMP0, TMP0, TMP1
+    |   xor TMP0, CARG1, STR:TMP3	// 0 iff src == string const.
     |    decode_RD4 TMP2, TMP2
-    |  subfic TMP0, TMP0, 0
+    |  subfic TMP0, TMP0, 0		// Carry set iff equal.
     |    addis TMP2, TMP2, -(BCBIAS_J*4 >> 16)
-    |  subfe TMP1, TMP1, TMP1
+    |  subfe TMP1, TMP1, TMP1		// 0 if equal, -1 if not.
     if (vk) {
       |  andc TMP2, TMP2, TMP1
     } else {
@@ -3788,15 +3787,17 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     vk = op == BC_ISEQN;
     |  // RA = src*8, RD = num_const*8, JMP with RD = target
     |.if DUALNUM
-    |  lwzux CARG1, RA, BASE
+    |  add RA, RA, BASE
+    |   add RD, RD, KBASE
+    |  ld CARG1, 0(RA)			// GC64: src TValue.
     |    addi PC, PC, 4
-    |   lwz CARG2, 4(RA)
-    |  lwzux CARG3, RD, KBASE
-    |  checknum cr0, CARG1
+    |  ld CARG3, 0(RD)			// GC64: num const TValue.
     |    lwz SAVE0, -4(PC)
-    |  checknum cr1, CARG3
+    |  srdi ITYPE, CARG1, 32
+    |   srdi TMP0, CARG3, 32
     |    decode_RD4 SAVE0, SAVE0
-    |   lwz CARG4, 4(RD)
+    |  cmplw cr0, ITYPE, TISNUMhi	// eq=int, lt=num, gt=other.
+    |   cmplw cr1, TMP0, TISNUMhi
     |    addis SAVE0, SAVE0, -(BCBIAS_J*4 >> 16)
     if (vk) {
       |->BC_ISEQN_Z:
@@ -3805,7 +3806,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     }
     |  bne cr0, >7
     |  bne cr1, >8
-    |   cmpw CARG2, CARG4
+    |   cmpw CARG1, CARG3		// Integer compare (low 32).
     |4:
     |.else
     if (vk) {
@@ -3855,7 +3856,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  blt cr1, >1
     |  // RA is a number, RD is an integer.
     |.if FPU
-    |  tonum_i f1, CARG4
+    |  tonum_i f1, CARG3		// GC64: num const value is low 32 of CARG3.
     |.else
     |  bl ->vm_sfi2d_2
     |.endif
@@ -3863,7 +3864,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |
     |8: // RA is an integer, RD is a number.
     |.if FPU
-    |  tonum_i f0, CARG2
+    |  tonum_i f0, CARG1		// GC64: src value is low 32 of CARG1.
     |.else
     |  bl ->vm_sfi2d_1
     |.endif
@@ -3883,11 +3884,12 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_ISEQP: case BC_ISNEP:
     vk = op == BC_ISEQP;
     |  // RA = src*8, RD = primitive_type*8 (~), JMP with RD = target
-    |  lwzx TMP0, BASE, RA
+    |  ldx TMP0, BASE, RA
     |   srwi TMP1, RD, 3
     |    lwz TMP2, 0(PC)
     |   not TMP1, TMP1
     |    addi PC, PC, 4
+    |  sradi TMP0, TMP0, 47		// GC64: src itype.
     |.if FFI
     |  cmpwi TMP0, LJ_TCDATA
     |.endif
@@ -3896,7 +3898,6 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  beq ->vmeta_equal_cd
     |.endif
     |    decode_RD4 TMP2, TMP2
-    |  .gpr64 extsw TMP0, TMP0
     |  addic TMP0, TMP0, -1
     |    addis TMP2, TMP2, -(BCBIAS_J*4 >> 16)
     |  subfe TMP1, TMP1, TMP1
