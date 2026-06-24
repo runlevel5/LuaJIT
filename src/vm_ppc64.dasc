@@ -566,7 +566,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  // Return from pcall or xpcall fast func.
   |  lp PC, FRAME_PC(TMP2)		// Fetch PC of previous frame.
   |  mr BASE, TMP2			// Restore caller base.
-  |   sldi TMP1, TMP1, 47		// GC64: true TValue (itype in high bits).
+  |   not TMP1, TMP1			// GC64: canonical true = ~(2<<47).
+  |   sldi TMP1, TMP1, 47
+  |   not TMP1, TMP1
   |  // Prepending may overwrite the pcall frame, so do it at the end.
   |   stdu TMP1, FRAME_PC(RA)		// Prepend true to results.
   |
@@ -700,7 +702,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  la RA, -8(BASE)			// Results start at BASE-8.
   |     .FPU stw TMP3, TMPD
   |   addi DISPATCH, DISPATCH, GG_G2DISP
-  |  sldi TMP1, TMP1, 47			// GC64: false TValue (itype in high bits).
+  |  not TMP1, TMP1			// GC64: canonical false = ~(1<<47).
+  |  sldi TMP1, TMP1, 47
+  |  not TMP1, TMP1
   |  std TMP1, 0(RA)			// Prepend false to error message.
   |  li RD, 16				// 2 results: false + error message.
   |    st_vmstate
@@ -3653,46 +3657,28 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 
   case BC_ISTC: case BC_ISFC: case BC_IST: case BC_ISF:
     |  // RA = dst*8 or unused, RD = src*8, JMP with RD = target
-    |  lwzx TMP0, BASE, RD
+    |  ldx TMP0, BASE, RD			// GC64: full TValue.
     |   lwz INS, 0(PC)
     |   addi PC, PC, 4
-    if (op == BC_IST || op == BC_ISF) {
-      |  .gpr64 extsw TMP0, TMP0
-      |  subfic TMP0, TMP0, LJ_TTRUE
-      |   decode_RD4 TMP2, INS
-      |  subfe TMP1, TMP1, TMP1
-      |   addis TMP2, TMP2, -(BCBIAS_J*4 >> 16)
-      if (op == BC_IST) {
-	|  andc TMP2, TMP2, TMP1
-      } else {
-	|  and TMP2, TMP2, TMP1
-      }
-      |  add PC, PC, TMP2
+    |  li TMP1, 1
+    |  sldi TMP1, TMP1, 47
+    |  not TMP1, TMP1			// GC64: ~(1<<47); truthy iff value < this.
+    |  cmpld cr0, TMP0, TMP1
+    |   decode_RD4 TMP2, INS
+    |   addis TMP2, TMP2, -(BCBIAS_J*4 >> 16)
+    if (op == BC_IST) {
+      |  bge >1				// Falsy: don't branch.
+    } else if (op == BC_ISF) {
+      |  blt >1				// Truthy: don't branch.
+    } else if (op == BC_ISTC) {
+      |  bge >1				// Falsy: don't copy/branch.
+      |  stdx TMP0, BASE, RA		// Copy src to dst.
     } else {
-      |  li TMP1, LJ_TFALSE
-      |.if FPU
-      |   lfdx f0, BASE, RD
-      |.else
-      |   lwzux CARG1, RD, BASE
-      |   lwz CARG2, 4(RD)
-      |.endif
-      |  cmplw TMP0, TMP1
-      if (op == BC_ISTC) {
-	|  bge >1
-      } else {
-	|  blt >1
-      }
-      |  addis PC, PC, -(BCBIAS_J*4 >> 16)
-      |  decode_RD4 TMP2, INS
-      |.if FPU
-      |   stfdx f0, BASE, RA
-      |.else
-      |   stwux CARG1, RA, BASE
-      |   stw CARG2, 4(RA)
-      |.endif
-      |  add PC, PC, TMP2
-      |1:
+      |  blt >1				// Truthy: don't copy/branch.
+      |  stdx TMP0, BASE, RA		// Copy src to dst.
     }
+    |  add PC, PC, TMP2
+    |1:
     |  ins_next
     break;
 
