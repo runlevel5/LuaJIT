@@ -3072,68 +3072,20 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |// int64_t lj_vm_num2int_check(double x)
   |->vm_num2int_check:
-  |.if FPU
-  |  subi sp, sp, 16
-  |  stfd FARG1, 0(sp)
-  |  lwz CARG1, 0(sp)
-  |  lwz CARG2, 4(sp)
-  |.endif
-  |  slwi TMP1, CARG1, 1
-  |.if PPE
-  |  or TMP1, TMP1, CARG2
-  |  cmpwi TMP1, 0
-  |.else
-  |  or. TMP1, TMP1, CARG2
-  |.endif
-  |  beq >2				// Return 0 for +-0.
-  |  rlwinm RB, CARG1, 12, 21, 31
-  |  subfic RB, RB, 1054
-  |  cmplwi RB, 32
-  |  bge >1				// Fail if |x| < 0x1p0 || |x| >= 0x1p32.
-  |  slwi CARG3, CARG1, 11
-  |  rlwimi CARG3, CARG2, 11, 21, 31	// Left-aligned mantissa.
-  |  subfic TMP1, RB, 32
-  |  slw TMP1, CARG3, TMP1
-  |  slwi TMP2, CARG2, 11
-  |.if PPE
-  |  or. TMP1, TMP1, TMP2
-  |.else
-  |  or TMP1, TMP1, TMP2
-  |  cmpwi TMP1, 0
-  |.endif
-  |  bne >1				// Fail if fractional part != 0.
-  |  oris CARG3, CARG3, 0x8000		// Merge leading 1.
-  |  srw CRET2, CARG3, RB		// lo = right-aligned absolute value.
-  |  srawi CARG4, CARG1, 31		// sign = 0 or -1.
-  |.if GPR64
-  |  add CRET2, CRET2, CARG4
-  |  cmpwi CRET2, 0
-  |.else
-  |  add. CRET2, CRET2, CARG4
-  |.endif
-  |  blt >1				// Fail if fractional part != 0.
-  |  xor CRET2, CRET2, CARG4		// lo = sign?-lo:lo = (lo+sign)^sign.
-  |2:
-  |.if GPR64
-  |  rldicl CRET1, CRET1, 0, 32
-  |.else
-  |  li CRET1, 0
-  |.endif
-  |.if FPU
-  |  addi sp, sp, 16
-  |.endif
-  |  blr
+  |  // GC64: native round-trip check (mirror arm64 fcvtzs/scvtf). Returns the
+  |  // int (>= 0) if x is a non-negative integer-valued double in int32 range,
+  |  // else a negative marker. Leaf: use the ELFv2 red zone.
+  |  fctiwz f0, FARG1			// (int32)x toward zero (saturating).
+  |  stfd f0, -16(sp)
+  |  lwa CRET1, -16(sp)			// Sign-extended int32 (LE: low word @ -16).
+  |  std CRET1, -8(sp)
+  |  lfd f1, -8(sp)
+  |  fcfid f1, f1			// (double)CRET1.
+  |  fcmpu cr0, f1, FARG1		// Exact round-trip?
+  |  bne >1
+  |  blr					// CRET1 already holds the int.
   |1:
-  |.if GPR64
-  |  lus CRET1, 0x8000
-  |  rldicr CRET1, CRET1, 32, 32
-  |.else
-  |  lus CRET1, 0x8000
-  |  lus CRET2, 0x8000
-  |.endif
-  |.if FPU
-  |  addi sp, sp, 16
-  |.endif
+  |  li CRET1, -1			// Not integer-valued: fail (< 0).
   |  blr
   |
   |// int64_t lj_vm_num2i64(double x)
