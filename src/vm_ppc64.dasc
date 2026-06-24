@@ -566,8 +566,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  // Return from pcall or xpcall fast func.
   |  lp PC, FRAME_PC(TMP2)		// Fetch PC of previous frame.
   |  mr BASE, TMP2			// Restore caller base.
+  |   sldi TMP1, TMP1, 47		// GC64: true TValue (itype in high bits).
   |  // Prepending may overwrite the pcall frame, so do it at the end.
-  |   stwu TMP1, FRAME_PC(RA)		// Prepend true to results.
+  |   stdu TMP1, FRAME_PC(RA)		// Prepend true to results.
   |
   |->vm_returnc:
   |  addi RD, RD, 8			// RD = (nresults+1)*8.
@@ -699,7 +700,8 @@ static void build_subroutines(BuildCtx *ctx)
   |  la RA, -8(BASE)			// Results start at BASE-8.
   |     .FPU stw TMP3, TMPD
   |   addi DISPATCH, DISPATCH, GG_G2DISP
-  |  stw TMP1, 0(RA)			// Prepend false to error message.
+  |  sldi TMP1, TMP1, 47			// GC64: false TValue (itype in high bits).
+  |  std TMP1, 0(RA)			// Prepend false to error message.
   |  li RD, 16				// 2 results: false + error message.
   |    st_vmstate
   |     .FPU lfs TONUM, TMPD
@@ -1695,17 +1697,26 @@ static void build_subroutines(BuildCtx *ctx)
   |.ffunc pcall
   |    lwz TMP1, L->maxstack
   |    add TMP2, BASE, NARGS8:RC
-  |  cmplwi NARGS8:RC, 8
+  |  cmplwi NARGS8:RC, 8			// cr0.eq set iff exactly 1 arg (no extras).
   |   lbz TMP3, DISPATCH_GL(hookmask)(DISPATCH)
   |    cmplw cr1, TMP1, TMP2
-  |  cror 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
+  |  cror 4*cr0+lt, 4*cr0+lt, 4*cr1+lt	// (preserves cr0.eq.)
   |  blt ->fff_fallback
   |   mr TMP2, BASE
-  |   la BASE, 8(BASE)
+  |   la BASE, 16(BASE)			// GC64/FR2: skip 2 frame slots.
   |  // Remember active hook before pcall.
   |  rlwinm TMP3, TMP3, 32-HOOK_ACTIVE_SHIFT, 31, 31
   |   subi NARGS8:RC, NARGS8:RC, 8
-  |  addi PC, TMP3, 8+FRAME_PCALL
+  |  addi PC, TMP3, 16+FRAME_PCALL
+  |  beq ->vm_call_dispatch		// No extra args: dispatch directly.
+  |  // FR2: shift args down by 8 to make room for the extra frame slot.
+  |1:
+  |   add TMP1, BASE, NARGS8:RC
+  |2:
+  |   ld TMP3, -16(TMP1)
+  |   stdu TMP3, -8(TMP1)
+  |  cmpd TMP1, BASE
+  |  bne <2
   |  b ->vm_call_dispatch
   |
   |.ffunc xpcall
