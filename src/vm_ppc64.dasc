@@ -1311,7 +1311,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  // TMP2 = old base, BASE = new base, RC = nargs*8
   |  mr CARG1, L
   |   stp TMP2, L->base			// This is the callers base!
-  |  subi CARG2, BASE, 8
+  |  subi CARG2, BASE, 16		// GC64/FR2: func @ BASE-16 (FRAME_FUNC).
   |   stp PC, SAVE_PC
   |  add CARG3, BASE, RC
   |   mr SAVE0, NARGS8:RC
