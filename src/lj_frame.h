@@ -210,16 +210,26 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK };  /* Special continuations. */
 #define CFRAME_OFS_MULTRES	408
 #define CFRAME_SIZE		384
 #define CFRAME_SHIFT_MULTRES	3
-#elif LJ_ARCH_PPC32ON64 || LJ_64
-/* PPC64 ELFv2 (ppc64le) and PS3 use the GPR64 (non-FRAME32) C frame layout.
-** Must match the GPR64 stack layout in vm_ppc.dasc (CFRAME_SPACE = 400).
-*/
+#elif LJ_ARCH_PPC32ON64
+/* PS3: GPR64 (non-FRAME32) layout with 32-bit pointers. */
 #define CFRAME_OFS_ERRF		472
 #define CFRAME_OFS_NRES		468
 #define CFRAME_OFS_PREV		448
 #define CFRAME_OFS_L		464
 #define CFRAME_OFS_PC		460
 #define CFRAME_OFS_MULTRES	456
+#define CFRAME_SIZE		400
+#define CFRAME_SHIFT_MULTRES	3
+#elif LJ_64
+/* PPC64 ELFv2 (ppc64le): GPR64 layout with 64-bit pointer saves, kept inside
+** our own frame. Must match the GPR64 stack layout in vm_ppc.dasc.
+*/
+#define CFRAME_OFS_MULTRES	80
+#define CFRAME_OFS_ERRF		76
+#define CFRAME_OFS_NRES		72
+#define CFRAME_OFS_L		64
+#define CFRAME_OFS_PC		56
+#define CFRAME_OFS_PREV		48
 #define CFRAME_SIZE		400
 #define CFRAME_SHIFT_MULTRES	3
 #else

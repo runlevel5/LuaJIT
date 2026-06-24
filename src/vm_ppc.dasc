@@ -203,13 +203,15 @@
 |
 |.else
 |
-|//			508(sp) // \ 32 bit C frame info.
-|.define SAVE_ERRF,	472(sp) // |
-|.define SAVE_NRES,	468(sp) // |
-|.define SAVE_L,	464(sp) //  > Parameter save area.
-|.define SAVE_PC,	460(sp) // |
-|.define SAVE_MULTRES,	456(sp) // |
-|.define SAVE_CFRAME,	448(sp) // / 64 bit C frame chain.
+|// GC64: keep the C frame info inside our own frame. Placing it in the C
+|// caller's parameter save area (above CFRAME_SPACE) overflows that area and
+|// corrupts the caller's locals. 48..112 is our (unused) param save area.
+|.define SAVE_MULTRES,	80(sp)  // \ 32 bit C frame info.
+|.define SAVE_ERRF,	76(sp)  // |
+|.define SAVE_NRES,	72(sp)  // /
+|.define SAVE_L,	64(sp)  // \ 64 bit lua_State *.
+|.define SAVE_PC,	56(sp)  // | 64 bit PC / sentinel.
+|.define SAVE_CFRAME,	48(sp)  // / 64 bit C frame chain.
 |.define SAVE_LR,	416(sp)
 |.define CFRAME_SPACE,	400     // Delta for sp.
 |// Back chain for sp:	400(sp) <-- sp entering interpreter
@@ -647,7 +649,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mr sp, CARG1
   |  mr CRET1, CARG2
   |->vm_unwind_c_eh:			// Landing pad for external unwinder.
-  |  lwz L, SAVE_L
+  |  lp L, SAVE_L
   |  .toc ld TOCREG, SAVE_TOC
   |   li TMP0, ~LJ_VMST_C
   |  lp GL:TMP1, L->glref
@@ -662,7 +664,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  rlwinm sp, CARG1, 0, 0, 29
   |.endif
   |->vm_unwind_ff_eh:			// Landing pad for external unwinder.
-  |  lwz L, SAVE_L
+  |  lp L, SAVE_L
   |  .toc ld TOCREG, SAVE_TOC
   |     li TISNUM, LJ_TISNUM		// Setup type comparison constants.
   |  lp BASE, L->base
@@ -703,7 +705,7 @@ static void build_subroutines(BuildCtx *ctx)
   |   srwi CARG2, RA, 3
   |2:
   |  // L->base = new base, L->top = top
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  mr CARG1, L
   |  bl extern lj_state_growstack	// (lua_State *L, int n)
   |  lp BASE, L->base
@@ -724,7 +726,7 @@ static void build_subroutines(BuildCtx *ctx)
   |    lp DISPATCH, L->glref		// Setup pointer to dispatch table.
   |  mr BASE, CARG2
   |    lbz TMP1, L->status
-  |   stw L, SAVE_L
+  |   stp L, SAVE_L
   |  li PC, FRAME_CP
   |  addi TMP0, sp, CFRAME_RESUME
   |    addi DISPATCH, DISPATCH, GG_G2DISP
@@ -732,7 +734,7 @@ static void build_subroutines(BuildCtx *ctx)
   |    cmplwi TMP1, 0
   |   stw CARG3, SAVE_ERRF
   |   stp CARG3, SAVE_CFRAME
-  |   stw CARG1, SAVE_PC		// Any value outside of bytecode is ok.
+  |   stp CARG1, SAVE_PC		// Any value outside of bytecode is ok.
   |  stp TMP0, L->cframe
   |    beq >3
   |
@@ -780,10 +782,10 @@ static void build_subroutines(BuildCtx *ctx)
   |    mr L, CARG1
   |   stw CARG3, SAVE_NRES
   |    lp DISPATCH, L->glref		// Setup pointer to dispatch table.
-  |   stw CARG1, SAVE_L
+  |   stp CARG1, SAVE_L
   |     mr BASE, CARG2
   |    addi DISPATCH, DISPATCH, GG_G2DISP
-  |   stw CARG1, SAVE_PC		// Any value outside of bytecode is ok.
+  |   stp CARG1, SAVE_PC		// Any value outside of bytecode is ok.
   |  stp TMP1, SAVE_CFRAME
   |  stp sp, L->cframe			// Add our C frame to cframe chain.
   |
@@ -822,10 +824,10 @@ static void build_subroutines(BuildCtx *ctx)
   |  saveregs
   |  mr L, CARG1
   |   lwz TMP0, L:CARG1->stack
-  |  stw CARG1, SAVE_L
+  |  stp CARG1, SAVE_L
   |   lp TMP1, L->top
   |     lp DISPATCH, L->glref		// Setup pointer to dispatch table.
-  |  stw CARG1, SAVE_PC			// Any value outside of bytecode is ok.
+  |  stp CARG1, SAVE_PC			// Any value outside of bytecode is ok.
   |   sub TMP0, TMP0, TMP1		// Compute -savestack(L, L->top).
   |    lp TMP1, L->cframe
   |     addi DISPATCH, DISPATCH, GG_G2DISP
@@ -966,7 +968,7 @@ static void build_subroutines(BuildCtx *ctx)
   |1:
   |  stp BASE, L->base
   |  mr CARG1, L
-  |  stw PC, SAVE_PC
+  |  stp PC, SAVE_PC
   |  bl extern lj_meta_tget		// (lua_State *L, TValue *o, TValue *k)
   |  // Returns TValue * (finished) or NULL (metamethod).
   |  cmplwi CRET1, 0
@@ -1057,7 +1059,7 @@ static void build_subroutines(BuildCtx *ctx)
   |1:
   |  stp BASE, L->base
   |  mr CARG1, L
-  |  stw PC, SAVE_PC
+  |  stp PC, SAVE_PC
   |  bl extern lj_meta_tset		// (lua_State *L, TValue *o, TValue *k)
   |  // Returns TValue * (finished) or NULL (metamethod).
   |  cmplwi CRET1, 0
@@ -1097,7 +1099,7 @@ static void build_subroutines(BuildCtx *ctx)
   |->vmeta_tsetr:
   |  stp BASE, L->base
   |  mr CARG1, L
-  |  stw PC, SAVE_PC
+  |  stp PC, SAVE_PC
   |  bl extern lj_tab_setinth  // (lua_State *L, GCtab *t, int32_t key)
   |  // Returns TValue *.
   |.if FPU
@@ -1118,7 +1120,7 @@ static void build_subroutines(BuildCtx *ctx)
   |.else
   |  add CARG2, BASE, RA
   |.endif
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |.if DUALNUM
   |  mr CARG3, RD
   |.else
@@ -1179,7 +1181,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  subi PC, PC, 4
   |   stp BASE, L->base
   |  mr CARG1, L
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  bl extern lj_meta_equal  // (lua_State *L, GCobj *o1, *o2, int ne)
   |  // Returns 0/1 or TValue * (metamethod).
   |  b <3
@@ -1190,7 +1192,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  subi PC, PC, 4
   |   stp BASE, L->base
   |  mr CARG1, L
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  bl extern lj_meta_equal_cd		// (lua_State *L, BCIns op)
   |  // Returns 0/1 or TValue * (metamethod).
   |  b <3
@@ -1202,7 +1204,7 @@ static void build_subroutines(BuildCtx *ctx)
   |   srwi CARG2, RA, 3
   |   mr CARG1, L
   |   srwi CARG3, RD, 3
-  |  stw PC, SAVE_PC
+  |  stp PC, SAVE_PC
   |  bl extern lj_meta_istype  // (lua_State *L, BCReg ra, BCReg tp)
   |  b ->cont_nop
   |
@@ -1245,7 +1247,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  add CARG2, BASE, RA
   |   stp BASE, L->base
   |  mr CARG1, L
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  decode_OP1 CARG5, INS		// Caveat: CARG5 overlaps INS.
   |  bl extern lj_meta_arith  // (lua_State *L, TValue *ra,*rb,*rc, BCReg op)
   |  // Returns NULL (finished) or TValue * (metamethod).
@@ -1270,7 +1272,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mr CARG2, RD
   |   stp BASE, L->base
   |  mr CARG1, L
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  bl extern lj_meta_len		// (lua_State *L, TValue *o)
   |  // Returns NULL (retry) or TValue * (metamethod base).
 #if LJ_52
@@ -1289,7 +1291,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mr CARG1, L
   |   stp TMP2, L->base			// This is the callers base!
   |  subi CARG2, BASE, 8
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  add CARG3, BASE, RC
   |   mr SAVE0, NARGS8:RC
   |  bl extern lj_meta_call	// (lua_State *L, TValue *func, TValue *top)
@@ -1302,7 +1304,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mr CARG1, L
   |   stp BASE, L->base
   |  subi CARG2, RA, 8
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  add CARG3, RA, RC
   |   mr SAVE0, NARGS8:RC
   |  bl extern lj_meta_call	// (lua_State *L, TValue *func, TValue *top)
@@ -1317,7 +1319,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mr CARG1, L
   |   stp BASE, L->base
   |  mr CARG2, RA
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  mr SAVE0, INS
   |  bl extern lj_meta_for	// (lua_State *L, TValue *base)
   |.if JIT
@@ -1556,7 +1558,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  cmplwi cr1, TMP0, 0
   |   stp BASE, L->base			// Add frame since C call can throw.
   |  crorc 4*cr0+eq, 4*cr0+gt, 4*cr1+eq
-  |   stw PC, SAVE_PC			// Redundant (but a defined value).
+  |   stp PC, SAVE_PC			// Redundant (but a defined value).
   |  beq ->fff_fallback
   |  ffgccheck
   |  mr CARG1, L
@@ -1823,7 +1825,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  crandc 4*cr6+gt, 4*cr7+eq, 4*cr0+eq	// base==top && st!=LUA_YIELD
   |   cmplw cr1, TMP2, TMP0
   |  cror 4*cr6+lt, 4*cr6+lt, 4*cr6+gt
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  cror 4*cr6+lt, 4*cr6+lt, 4*cr1+gt		// cond1 || cond2 || stackov
   |   stp BASE, L->base
   |  blt cr6, ->fff_fallback
@@ -1908,7 +1910,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  addi RD, RD, 8
   |.endif
   |7:
-  |    stw PC, SAVE_PC
+  |    stp PC, SAVE_PC
   |   mr MULTRES, RD
   |  beq ->BC_RET_Z
   |  b ->vm_return
@@ -2425,7 +2427,7 @@ static void build_subroutines(BuildCtx *ctx)
   |->fff_newstr:
   |  mr CARG1, L
   |  stp BASE, L->base
-  |  stw PC, SAVE_PC
+  |  stp PC, SAVE_PC
   |  bl extern lj_str_new		// (lua_State *L, char *str, size_t l)
   |->fff_resstr:
   |  // Returns GCstr *.
@@ -2518,7 +2520,7 @@ static void build_subroutines(BuildCtx *ctx)
   |   lwz TMP0, SBUF:CARG1->b
   |  stw L, SBUF:CARG1->L
   |  stp BASE, L->base
-  |  stw PC, SAVE_PC
+  |  stp PC, SAVE_PC
   |   stw TMP0, SBUF:CARG1->w
   |  bl extern lj_buf_putstr_ .. name
   |  bl extern lj_buf_tostr
@@ -2723,7 +2725,7 @@ static void build_subroutines(BuildCtx *ctx)
   |   lwz PC, FRAME_PC(BASE)		// Fallback may overwrite PC.
   |    addi TMP0, TMP1, 8*LUA_MINSTACK
   |     lwz TMP2, L->maxstack
-  |   stw PC, SAVE_PC			// Redundant (but a defined value).
+  |   stp PC, SAVE_PC			// Redundant (but a defined value).
   |.if P64
   |  mr r12, TMP3		// ELFv2: r12 = entry.
   |.else
@@ -2773,7 +2775,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mflr SAVE0
   |   stp BASE, L->base
   |  add TMP0, BASE, NARGS8:RC
-  |   stw PC, SAVE_PC			// Redundant (but a defined value).
+  |   stp PC, SAVE_PC			// Redundant (but a defined value).
   |  stp TMP0, L->top
   |  mr CARG1, L
   |  bl extern lj_gc_step		// (lua_State *L)
@@ -2857,7 +2859,7 @@ static void build_subroutines(BuildCtx *ctx)
   |.if JIT
   |  lwz LFUNC:TMP1, FRAME_FUNC(BASE)
   |   addi CARG1, DISPATCH, GG_DISP2J
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  lwz TMP1, LFUNC:TMP1->pc
   |   mr CARG2, PC
   |   stw L, DISPATCH_J(L)(DISPATCH)
@@ -2882,7 +2884,7 @@ static void build_subroutines(BuildCtx *ctx)
   |1:
   |.endif
   |  add TMP0, BASE, RC
-  |   stw PC, SAVE_PC
+  |   stp PC, SAVE_PC
   |  mr CARG1, L
   |   stp BASE, L->base
   |  sub RA, RA, BASE
@@ -2891,7 +2893,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  // Returns ASMFunction.
   |  lp BASE, L->base
   |   lp TMP0, L->top
-  |   stw ZERO, SAVE_PC			// Invalidate for subsequent line hook.
+  |   stp ZERO, SAVE_PC			// Invalidate for subsequent line hook.
   |  sub NARGS8:RC, TMP0, BASE
   |  add RA, BASE, RA
   |  lwz LFUNC:RB, FRAME_FUNC(BASE)
@@ -3029,15 +3031,15 @@ static void build_subroutines(BuildCtx *ctx)
   |.else
   |  rlwinm sp, TMP1, 0, 0, 29
   |.endif
-  |   lwz PC, SAVE_PC			// Get SAVE_PC.
+  |   lp PC, SAVE_PC			// Get SAVE_PC.
   |  stw TMP2, 0(sp)
-  |  stw L, SAVE_L			// Set SAVE_L (on-trace resume/yield).
+  |  stp L, SAVE_L			// Set SAVE_L (on-trace resume/yield).
   |  b >1
   |.endif
   |->vm_exit_interp:
   |.if JIT
   |  // CARG1 = MULTRES or negated error code, BASE, PC and JGL set.
-  |  lwz L, SAVE_L
+  |  lp L, SAVE_L
   |  addi DISPATCH, JGL, -GG_DISP2G-32768
   |  stp BASE, L->base
   |1:
@@ -3391,7 +3393,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  addi TMP0, sp, CFRAME_SPACE+8
   |  stw TMP0, CTSTATE->cb.stack
   |   mr CARG1, CTSTATE
-  |  stw CTSTATE, SAVE_PC		// Any value outside of bytecode is ok.
+  |  stp CTSTATE, SAVE_PC		// Any value outside of bytecode is ok.
   |   mr CARG2, sp
   |  bl extern lj_ccallback_enter	// (CTState *cts, void *cf)
   |  // Returns lua_State *.
@@ -4353,7 +4355,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  add CARG2, BASE, RC
     |  mr SAVE0, RB
     |->BC_CAT_Z:
-    |   stw PC, SAVE_PC
+    |   stp PC, SAVE_PC
     |  mr CARG1, L
     |  srwi CARG3, CARG3, 3
     |  bl extern lj_meta_cat		// (lua_State *L, TValue *top, int left)
@@ -4614,7 +4616,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  srwi TMP1, RD, 1
     |   stp BASE, L->base
     |  subfic TMP1, TMP1, -4
-    |   stw PC, SAVE_PC
+    |   stp PC, SAVE_PC
     |  lwzx CARG2, KBASE, TMP1		// KBASE-4-tab_const*4
     |   mr CARG1, L
     |  lwz CARG3, FRAME_FUNC(BASE)
@@ -4638,7 +4640,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz TMP1, DISPATCH_GL(gc.threshold)(DISPATCH)
     |   stp BASE, L->base
     |  cmplw TMP0, TMP1
-    |   stw PC, SAVE_PC
+    |   stp PC, SAVE_PC
     |  bge >5
     |1:
     if (op == BC_TNEW) {
@@ -5020,7 +5022,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // But check for __newindex first.
     |  lwz TAB:TMP1, TAB:RB->metatable
     |   la CARG3, DISPATCH_GL(tmptv)(DISPATCH)
-    |   stw PC, SAVE_PC
+    |   stp PC, SAVE_PC
     |   mr CARG1, L
     |  cmplwi TAB:TMP1, 0
     |   stp BASE, L->base
@@ -5181,7 +5183,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |5:  // Need to resize array part.
     |   stp BASE, L->base
     |  mr CARG1, L
-    |   stw PC, SAVE_PC
+    |   stp PC, SAVE_PC
     |  mr SAVE0, RD
     |  bl extern lj_tab_reasize		// (lua_State *L, GCtab *t, int nasize)
     |  // Must not reallocate the stack.
@@ -5531,7 +5533,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  sub SAVE0, RC, BASE		// Need delta, because BASE may change.
     |   stp BASE, L->base
     |  sub RA, RA, BASE
-    |   stw PC, SAVE_PC
+    |   stp PC, SAVE_PC
     |  srwi CARG2, TMP1, 3
     |  bl extern lj_state_growstack	// (lua_State *L, int n)
     |  lp BASE, L->base
