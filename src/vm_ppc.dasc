@@ -129,6 +129,7 @@
 |.define TISNUM,	r22
 |.define TISNIL,	r23
 |.define ZERO,		r24
+|.define ITYPE,		r26	// GC64: scratch for extracted itype in type checks.
 |.if FPU
 |.define TOBIT,		f30	// 2^52 + 2^51.
 |.define TONUM,		f31	// 2^52 + 2^51 + 2^31.
@@ -386,7 +387,7 @@
 |
 |// Access to frame relative to BASE.
 |.define FRAME_PC,	-8
-|.define FRAME_FUNC,	-4
+|.define FRAME_FUNC,	-16	// GC64/FR2: 2-slot frames ([func][frame-link]).
 |
 |// Instruction decode.
 |.macro decode_OP4, dst, ins; rlwinm dst, ins, 2, 22, 29; .endmacro
@@ -447,7 +448,7 @@
 |// Call decode and dispatch.
 |.macro ins_callt
 |  // BASE = new base, RB = LFUNC/CFUNC, RC = nargs*8, FRAME_PC(BASE) = PC
-|  lwz PC, LFUNC:RB->pc
+|  lp PC, LFUNC:RB->pc
 |  lwz INS, 0(PC)
 |   addi PC, PC, 4
 |  decode_OPP TMP1, INS
@@ -460,7 +461,7 @@
 |
 |.macro ins_call
 |  // BASE = new base, RB = LFUNC/CFUNC, RC = nargs*8, PC = caller PC
-|  stw PC, FRAME_PC(BASE)
+|  stp PC, FRAME_PC(BASE)
 |  ins_callt
 |.endmacro
 |
@@ -469,10 +470,17 @@
 |// Macros to test operand types.
 |.macro checknum, reg; cmplw reg, TISNUM; .endmacro
 |.macro checknum, cr, reg; cmplw cr, reg, TISNUM; .endmacro
-|.macro checkstr, reg; cmpwi reg, LJ_TSTR; .endmacro
-|.macro checktab, reg; cmpwi reg, LJ_TTAB; .endmacro
-|.macro checkfunc, reg; cmpwi reg, LJ_TFUNC; .endmacro
-|.macro checknil, reg; cmpwi reg, LJ_TNIL; .endmacro
+|// GC64: extract itype (sradi 47) into ITYPE, mask reg to its pointer
+|// (rldicl 0,17), and set cr0 to (itype == tp). Caller branches on cr0.
+|.macro checktp, reg, tp
+|  sradi ITYPE, reg, 47
+|  rldicl reg, reg, 0, 17
+|  cmpdi ITYPE, tp
+|.endmacro
+|.macro checkstr, reg; checktp reg, LJ_TSTR; .endmacro
+|.macro checktab, reg; checktp reg, LJ_TTAB; .endmacro
+|.macro checkfunc, reg; checktp reg, LJ_TFUNC; .endmacro
+|.macro checknil, reg; checktp reg, LJ_TNIL; .endmacro
 |
 |.macro branch_RD
 |  srwi TMP0, RD, 1
@@ -5196,11 +5204,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_CALL:
     |  // RA = base*8, (RB = (nresults+1)*8,) RC = (nargs+1)*8
     |  mr TMP2, BASE
-    |  lwzux TMP0, BASE, RA
-    |   lwz LFUNC:RB, 4(BASE)
+    |  add BASE, BASE, RA
+    |  lp LFUNC:RB, 0(BASE)		// Load function TValue (GC64/FR2).
     |    subi NARGS8:RC, NARGS8:RC, 8
-    |   addi BASE, BASE, 8
-    |  checkfunc TMP0; bne ->vmeta_call
+    |   addi BASE, BASE, 16		// FR2: skip [func][frame-link] slots.
+    |  checkfunc RB; bne ->vmeta_call	// Masks RB to the GCfunc pointer.
     |  ins_call
     break;
 
