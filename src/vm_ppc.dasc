@@ -4404,13 +4404,13 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 
   case BC_KSTR:
     |  // RA = dst*8, RD = str_const*8 (~)
-    |  srwi TMP1, RD, 1
-    |  subfic TMP1, TMP1, -4
+    |  subfic TMP1, RD, -8
     |  ins_next1
-    |  lwzx TMP0, KBASE, TMP1		// KBASE-4-str_const*4
-    |  li TMP2, LJ_TSTR
-    |  stwux TMP2, RA, BASE
-    |  stw TMP0, 4(RA)
+    |  ldx TMP0, KBASE, TMP1		// KBASE - (str_const+1)*8 (8-byte consts).
+    |  li ITYPE, LJ_TSTR
+    |  sldi ITYPE, ITYPE, 47
+    |  or TMP0, TMP0, ITYPE		// GC64: tag as string TValue.
+    |  stdux TMP0, RA, BASE
     |  ins_next2
     break;
   case BC_KCDATA:
