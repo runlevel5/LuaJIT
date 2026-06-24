@@ -4776,13 +4776,13 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_TGETS:
     |  // RA = dst*8, RB = table*8, RC = str_const*8 (~)
-    |  lwzux CARG1, RB, BASE
-    |   srwi TMP1, RC, 1
-    |    lwz TAB:RB, 4(RB)
-    |   subfic TMP1, TMP1, -4
-    |  checktab CARG1
-    |   lwzx STR:RC, KBASE, TMP1	// KBASE-4-str_const*4
+    |  add RB, RB, BASE
+    |   subfic TMP1, RC, -8
+    |  ld CARG1, 0(RB)			// GC64: table TValue.
+    |   ldx STR:RC, KBASE, TMP1		// GC64: string const (raw GCRef ptr).
+    |  checktab CARG1			// Masks CARG1 to the table ptr.
     |  bne ->vmeta_tgets1
+    |  mr TAB:RB, CARG1
     |->BC_TGETS_Z:
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = dst*8
     |  lwz TMP0, TAB:RB->hmask
