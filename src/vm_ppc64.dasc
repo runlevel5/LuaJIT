@@ -4889,12 +4889,14 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_CALLT:
     |  // RA = base*8, (RB = 0,) RC = (nargs+1)*8
-    |  lwzux TMP0, RA, BASE
-    |   lwz LFUNC:RB, 4(RA)
+    |  add RA, RA, BASE
+    |  ld TMP0, 0(RA)			// Func TValue.
     |    subi NARGS8:RC, NARGS8:RC, 8
     |    lp TMP1, FRAME_PC(BASE)
-    |  checkfunc TMP0
-    |   addi RA, RA, 8
+    |  sradi RB, TMP0, 47
+    |  cmpdi RB, LJ_TFUNC
+    |  rldicl LFUNC:RB, TMP0, 0, 17	// Masked func ptr.
+    |   addi RA, RA, 16			// GC64/FR2: past func + frame slot.
     |  bne ->vmeta_callt
     |->BC_CALLT_Z:
     |  andix. TMP0, TMP1, FRAME_TYPE	// Caveat: preserve cr0 until the crand.
@@ -4903,26 +4905,18 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    cmplwi cr1, NARGS8:RC, 0
     |  bne >7
     |1:
-    |  stw LFUNC:RB, FRAME_FUNC(BASE)	// Copy function down, but keep PC.
+    |  li ITYPE, LJ_TFUNC
+    |  sldi ITYPE, ITYPE, 47
+    |  or TMP0, LFUNC:RB, ITYPE
+    |  std TMP0, FRAME_FUNC(BASE)	// Copy function down (tagged), but keep PC.
     |  li TMP2, 0
     |   cmplwi cr7, TMP3, 1		// (> FF_C) Calling a fast function?
     |    beq cr1, >3
     |2:
     |  addi TMP3, TMP2, 8
-    |.if FPU
     |   lfdx f0, RA, TMP2
-    |.else
-    |   add CARG3, RA, TMP2
-    |   lwz CARG1, 0(CARG3)
-    |   lwz CARG2, 4(CARG3)
-    |.endif
     |  cmplw cr1, TMP3, NARGS8:RC
-    |.if FPU
     |   stfdx f0, BASE, TMP2
-    |.else
-    |   stwux CARG1, TMP2, BASE
-    |   stw CARG2, 4(TMP2)
-    |.endif
     |  mr TMP2, TMP3
     |  bne cr1, <2
     |3:
@@ -4935,7 +4929,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz INS, -4(TMP1)
     |  decode_RA8 RA, INS
     |  sub TMP1, BASE, RA
-    |  lp LFUNC:TMP1, FRAME_FUNC-8(TMP1)
+    |  lp LFUNC:TMP1, FRAME_FUNC-16(TMP1)
     |  rldicl TMP1, TMP1, 0, 17
     |  lp TMP1, LFUNC:TMP1->pc
     |  lp KBASE, PC2PROTO(k)(TMP1)	// Need to prepare KBASE.
