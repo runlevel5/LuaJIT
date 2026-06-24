@@ -5556,46 +5556,45 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     vk = (op == BC_IFORL || op == BC_JFORL);
     |.if DUALNUM
     |  // Integer loop.
-    |  lwzux TMP1, RA, BASE
-    |   lwz CARG1, FORL_IDX*8+4(RA)
-    |  cmplw cr0, TMP1, TISNUM
+    |  add RA, RA, BASE
+    |  ld CARG1, FORL_IDX*8(RA)		// GC64: IDX TValue.
+    |  srdi TMP1, CARG1, 32
+    |  cmplw cr0, TMP1, TISNUMhi
     if (vk) {
-      |   lwz CARG3, FORL_STEP*8+4(RA)
+      |   ld CARG3, FORL_STEP*8(RA)
       |  bne >9
-      |.if GPR64
-      |  // Need to check overflow for (a<<32) + (b<<32).
-      |  rldicr TMP0, CARG1, 32, 31
-      |  rldicr TMP2, CARG3, 32, 31
-      |  add CARG1, CARG1, CARG3
-      |  addo. TMP0, TMP0, TMP2
-      |.else
-      |  addo. CARG1, CARG1, CARG3
-      |.endif
-      |    cmpwi cr6, CARG3, 0
-      |   lwz CARG2, FORL_STOP*8+4(RA)
-      |  bso >6
+      |  extsw TMP0, CARG1			// IDX value.
+      |  extsw TMP2, CARG3			// STEP value.
+      |    cmpwi cr6, TMP2, 0
+      |  add TMP0, TMP0, TMP2
+      |  extsw TMP1, TMP0
+      |  cmpd cr5, TMP1, TMP0			// 32-bit overflow?
+      |   ld CARG2, FORL_STOP*8(RA)
+      |  bne cr5, >2				// Overflow: exit loop.
+      |  clrldi TMP0, TMP0, 32
+      |  add CARG1, TMP0, TISNUM		// Re-tagged new IDX.
       |4:
-      |  stw CARG1, FORL_IDX*8+4(RA)
+      |  std CARG1, FORL_IDX*8(RA)
     } else {
-      |  lwz SAVE0, FORL_STEP*8(RA)
-      |   lwz CARG3, FORL_STEP*8+4(RA)
-      |  lwz TMP2, FORL_STOP*8(RA)
-      |   lwz CARG2, FORL_STOP*8+4(RA)
-      |  cmplw cr7, SAVE0, TISNUM
-      |  cmplw cr1, TMP2, TISNUM
+      |   ld CARG3, FORL_STEP*8(RA)
+      |   ld CARG2, FORL_STOP*8(RA)
+      |  srdi SAVE0, CARG3, 32
+      |  srdi TMP2, CARG2, 32
+      |  cmplw cr7, SAVE0, TISNUMhi
+      |  cmplw cr1, TMP2, TISNUMhi
       |  crand 4*cr0+eq, 4*cr0+eq, 4*cr7+eq
       |  crand 4*cr0+eq, 4*cr0+eq, 4*cr1+eq
-      |    cmpwi cr6, CARG3, 0
+      |   extsw TMP2, CARG3
+      |    cmpwi cr6, TMP2, 0
       |  bne >9
     }
     |    blt cr6, >5
     |  cmpw CARG1, CARG2
     |1:
-    |   stw TISNUM, FORL_EXT*8(RA)
+    |   std CARG1, FORL_EXT*8(RA)		// GC64: EXT = IDX (tagged).
     if (op != BC_JFORL) {
       |  srwi RD, RD, 1
     }
-    |   stw CARG1, FORL_EXT*8+4(RA)
     if (op != BC_JFORL) {
       |  add RD, PC, RD
     }
@@ -5615,89 +5614,34 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |5:  // Invert check for negative step.
     |  cmpw CARG2, CARG1
     |  b <1
-    if (vk) {
-      |6:  // Potential overflow.
-      |  checkov TMP0, <4		// Ignore unrelated overflow.
-      |  b <2
-    }
     |.endif
     if (vk) {
-      |.if DUALNUM
       |9:  // FP loop.
-      |.if FPU
       |  lfd f1, FORL_IDX*8(RA)
-      |.else
-      |  lwz CARG1, FORL_IDX*8(RA)
-      |  lwz CARG2, FORL_IDX*8+4(RA)
-      |.endif
-      |.else
-      |  lfdux f1, RA, BASE
-      |.endif
-      |.if FPU
+      |  bgt cr0, ->vmeta_for		// IDX not a number.
       |  lfd f3, FORL_STEP*8(RA)
       |  lfd f2, FORL_STOP*8(RA)
       |  fadd f1, f1, f3
       |  stfd f1, FORL_IDX*8(RA)
-      |.else
-      |  lwz CARG3, FORL_STEP*8(RA)
-      |  lwz CARG4, FORL_STEP*8+4(RA)
-      |  mr SAVE1, RD
-      |  blex __adddf3
-      |  mr RD, SAVE1
-      |  stw CRET1, FORL_IDX*8(RA)
-      |  stw CRET2, FORL_IDX*8+4(RA)
-      |  lwz CARG3, FORL_STOP*8(RA)
-      |  lwz CARG4, FORL_STOP*8+4(RA)
-      |.endif
-      |   lwz SAVE0, FORL_STEP*8(RA)
     } else {
-      |.if DUALNUM
       |9:  // FP loop.
-      |.else
-      |  lwzux TMP1, RA, BASE
-      |  lwz SAVE0, FORL_STEP*8(RA)
-      |  lwz TMP2, FORL_STOP*8(RA)
-      |  cmplw cr0, TMP1, TISNUM
-      |  cmplw cr7, SAVE0, TISNUM
-      |  cmplw cr1, TMP2, TISNUM
-      |.endif
-      |.if FPU
-      |   lfd f1, FORL_IDX*8(RA)
-      |.else
-      |   lwz CARG1, FORL_IDX*8(RA)
-      |   lwz CARG2, FORL_IDX*8+4(RA)
-      |.endif
+      |  lfd f1, FORL_IDX*8(RA)
+      |  bgt cr0, ->vmeta_for		// IDX not a number.
       |  crand 4*cr0+lt, 4*cr0+lt, 4*cr7+lt
       |  crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
-      |.if FPU
       |   lfd f2, FORL_STOP*8(RA)
-      |.else
-      |   lwz CARG3, FORL_STOP*8(RA)
-      |   lwz CARG4, FORL_STOP*8+4(RA)
-      |.endif
-      |  bge ->vmeta_for
+      |  bge ->vmeta_for			// STOP or STEP not a number.
     }
-    |  cmpwi cr6, SAVE0, 0
+    |  ld SAVE0, FORL_STEP*8(RA)
+    |  cmpdi cr6, SAVE0, 0			// STEP < 0? (double sign bit)
     if (op != BC_JFORL) {
       |  srwi RD, RD, 1
     }
-    |.if FPU
     |   stfd f1, FORL_EXT*8(RA)
-    |.else
-    |   stw CARG1, FORL_EXT*8(RA)
-    |   stw CARG2, FORL_EXT*8+4(RA)
-    |.endif
     if (op != BC_JFORL) {
       |  add RD, PC, RD
     }
-    |.if FPU
     |  fcmpu cr0, f1, f2
-    |.else
-    |  mr SAVE1, RD
-    |  blex __ledf2
-    |  cmpwi CRET1, 0
-    |  mr RD, SAVE1
-    |.endif
     if (op == BC_JFORI) {
       |  addis PC, RD, -(BCBIAS_J*4 >> 16)
     }
@@ -5705,11 +5649,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     if (op == BC_FORI) {
       |  bgt >3
     } else if (op == BC_IFORL) {
-      |.if DUALNUM
       |  bgty <2
-      |.else
-      |  bgt >2
-      |.endif
       |1:
       |  addis PC, RD, -(BCBIAS_J*4 >> 16)
     } else if (op == BC_JFORI) {
@@ -5717,12 +5657,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     } else {
       |  bley =>BC_JLOOP
     }
-    |.if DUALNUM
     |  b <2
-    |.else
-    |2:
-    |  ins_next
-    |.endif
     |5:  // Negative step.
     if (op == BC_FORI) {
       |  bge <2
