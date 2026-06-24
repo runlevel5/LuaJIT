@@ -3540,19 +3540,21 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_ISLT: case BC_ISGE: case BC_ISLE: case BC_ISGT:
     |  // RA = src1*8, RD = src2*8, JMP with RD = target
     |.if DUALNUM
-    |  lwzux CARG1, RA, BASE
+    |  add RA, RA, BASE
+    |   add RD, RD, BASE
+    |  ld CARG1, 0(RA)			// GC64: src1 TValue.
     |    addi PC, PC, 4
-    |   lwz CARG2, 4(RA)
-    |  lwzux CARG3, RD, BASE
+    |  ld CARG3, 0(RD)			// GC64: src2 TValue.
     |    lwz TMP2, -4(PC)
-    |  checknum cr0, CARG1
-    |   lwz CARG4, 4(RD)
+    |  srdi ITYPE, CARG1, 32
+    |   srdi TMP0, CARG3, 32
     |    decode_RD4 TMP2, TMP2
-    |  checknum cr1, CARG3
+    |  cmplw cr0, ITYPE, TISNUMhi	// src1: eq=int, lt=num, gt=other.
+    |   cmplw cr1, TMP0, TISNUMhi	// src2: eq=int, lt=num, gt=other.
     |    addis SAVE0, TMP2, -(BCBIAS_J*4 >> 16)
     |  bne cr0, >7
     |  bne cr1, >8
-    |   cmpw CARG2, CARG4
+    |   cmpw CARG1, CARG3		// Integer compare (low 32, tags ignored).
     if (op == BC_ISLT) {
       |  bge >2
     } else if (op == BC_ISGE) {
@@ -3575,7 +3577,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  blt cr1, >4
     |  // RA is a number, RD is an integer.
     |.if FPU
-    |  tonum_i f1, CARG4
+    |  tonum_i f1, CARG3		// GC64: src2 value is low 32 of CARG3.
     |.else
     |  bl ->vm_sfi2d_2
     |.endif
@@ -3585,7 +3587,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  bgt cr1, ->vmeta_comp
     |  // RA is an integer, RD is a number.
     |.if FPU
-    |  tonum_i f0, CARG2
+    |  tonum_i f0, CARG1		// GC64: src1 value is low 32 of CARG1.
     |.else
     |  bl ->vm_sfi2d_1
     |.endif
