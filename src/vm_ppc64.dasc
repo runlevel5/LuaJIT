@@ -130,6 +130,7 @@
 |.define TISNIL,	r23
 |.define ZERO,		r24
 |.define ITYPE,		r26	// GC64: scratch for extracted itype in type checks.
+|.define TISNUMhi,	r27	// GC64: LJ_TISNUM<<15 (= 0xfff90000), for int/num checks.
 |.if FPU
 |.define TOBIT,		f30	// 2^52 + 2^51.
 |.define TONUM,		f31	// 2^52 + 2^51 + 2^31.
@@ -489,7 +490,8 @@
 |.macro init_tisnum
 |  li TISNUM, 0
 |  ori TISNUM, TISNUM, (LJ_TISNUM>>1)&0xffff
-|  sldi TISNUM, TISNUM, 48
+|  sldi TISNUM, TISNUM, 48		// TISNUM = LJ_TISNUM << 47 (0xfff9<<48).
+|  srdi TISNUMhi, TISNUM, 32		// TISNUMhi = LJ_TISNUM << 15 (0xfff90000).
 |.endmacro
 |.macro add_TISNUM, dst, src
 |  add dst, src, TISNUM
