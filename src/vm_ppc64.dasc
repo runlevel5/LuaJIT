@@ -4330,28 +4330,17 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = uvnum*8, RD = src*8
     |  lp LFUNC:RB, FRAME_FUNC(BASE)
     |  rldicl RB, RB, 0, 17
-    |    srwi RA, RA, 1
     |    addi RA, RA, offsetof(GCfuncL, uvptr)
-    |.if FPU
-    |   lfdux f0, RD, BASE
-    |.else
-    |   lwzux CARG1, RD, BASE
-    |   lwz CARG3, 4(RD)
-    |.endif
-    |  lwzx UPVAL:RB, LFUNC:RB, RA
+    |   ldx CARG3, BASE, RD		// GC64: src TValue.
+    |  ldx UPVAL:RB, LFUNC:RB, RA		// GC64: upvalue.
     |  lbz TMP3, UPVAL:RB->marked
-    |   lwz CARG2, UPVAL:RB->v
+    |   lp CARG2, UPVAL:RB->v
     |  andix. TMP3, TMP3, LJ_GC_BLACK	// isblack(uv)
     |    lbz TMP0, UPVAL:RB->closed
-    |   lwz TMP2, 0(RD)
-    |.if FPU
-    |   stfd f0, 0(CARG2)
-    |.else
-    |   stw CARG1, 0(CARG2)
-    |   stw CARG3, 4(CARG2)
-    |.endif
+    |   sradi TMP2, CARG3, 47		// src itype.
+    |   std CARG3, 0(CARG2)		// *v = src.
     |    cmplwi cr1, TMP0, 0
-    |   lwz TMP1, 4(RD)
+    |   rldicl TMP1, CARG3, 0, 17		// src GC ptr (for barrier).
     |  cror 4*cr0+eq, 4*cr0+eq, 4*cr1+eq
     |   subi TMP2, TMP2, (LJ_TNUMX+1)
     |  bne >2				// Upvalue is closed and black?
@@ -4373,20 +4362,19 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = uvnum*8, RD = str_const*8 (~)
     |  lp LFUNC:RB, FRAME_FUNC(BASE)
     |  rldicl RB, RB, 0, 17
-    |   srwi TMP1, RD, 1
-    |    srwi RA, RA, 1
-    |   subfic TMP1, TMP1, -4
+    |   subfic TMP1, RD, -8
     |    addi RA, RA, offsetof(GCfuncL, uvptr)
-    |   lwzx STR:TMP1, KBASE, TMP1	// KBASE-4-str_const*4
-    |  lwzx UPVAL:RB, LFUNC:RB, RA
+    |   ldx STR:TMP1, KBASE, TMP1		// GC64: string const (raw GCRef).
+    |  ldx UPVAL:RB, LFUNC:RB, RA
     |  lbz TMP3, UPVAL:RB->marked
-    |   lwz CARG2, UPVAL:RB->v
+    |   lp CARG2, UPVAL:RB->v
     |  andix. TMP3, TMP3, LJ_GC_BLACK	// isblack(uv)
-    |   lbz TMP3, STR:TMP1->marked
     |   lbz TMP2, UPVAL:RB->closed
     |   li TMP0, LJ_TSTR
-    |   stw STR:TMP1, 4(CARG2)
-    |   stw TMP0, 0(CARG2)
+    |   sldi TMP0, TMP0, 47
+    |   or TMP0, STR:TMP1, TMP0		// Tagged string TValue.
+    |   std TMP0, 0(CARG2)
+    |   lbz TMP3, STR:TMP1->marked
     |  bne >2
     |1:
     |  ins_next
@@ -4405,37 +4393,26 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = uvnum*8, RD = num_const*8
     |  lp LFUNC:RB, FRAME_FUNC(BASE)
     |  rldicl RB, RB, 0, 17
-    |   srwi RA, RA, 1
     |   addi RA, RA, offsetof(GCfuncL, uvptr)
-    |.if FPU
-    |    lfdx f0, KBASE, RD
-    |.else
-    |    lwzux TMP2, RD, KBASE
-    |    lwz TMP3, 4(RD)
-    |.endif
-    |  lwzx UPVAL:RB, LFUNC:RB, RA
+    |    ldx TMP0, KBASE, RD		// GC64: num const TValue.
+    |  ldx UPVAL:RB, LFUNC:RB, RA
     |  ins_next1
-    |  lwz TMP1, UPVAL:RB->v
-    |.if FPU
-    |  stfd f0, 0(TMP1)
-    |.else
-    |  stw TMP2, 0(TMP1)
-    |  stw TMP3, 4(TMP1)
-    |.endif
+    |  lp TMP1, UPVAL:RB->v
+    |  std TMP0, 0(TMP1)
     |  ins_next2
     break;
   case BC_USETP:
     |  // RA = uvnum*8, RD = primitive_type*8 (~)
     |  lp LFUNC:RB, FRAME_FUNC(BASE)
     |  rldicl RB, RB, 0, 17
-    |   srwi RA, RA, 1
     |    srwi TMP0, RD, 3
     |   addi RA, RA, offsetof(GCfuncL, uvptr)
-    |    not TMP0, TMP0
-    |  lwzx UPVAL:RB, LFUNC:RB, RA
+    |    sldi TMP0, TMP0, 47
+    |    not TMP0, TMP0			// GC64: ~(primitive_type << 47).
+    |  ldx UPVAL:RB, LFUNC:RB, RA
     |  ins_next1
-    |  lwz TMP1, UPVAL:RB->v
-    |  stw TMP0, 0(TMP1)
+    |  lp TMP1, UPVAL:RB->v
+    |  std TMP0, 0(TMP1)
     |  ins_next2
     break;
 
