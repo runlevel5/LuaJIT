@@ -4539,11 +4539,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_TNEW:
   case BC_TDUP:
     |  // RA = dst*8, RD = (hbits|asize)*8 | tab_const*8 (~)
-    |  lwz TMP0, DISPATCH_GL(gc.total)(DISPATCH)
+    |  lp TMP0, DISPATCH_GL(gc.total)(DISPATCH)
     |   mr CARG1, L
-    |  lwz TMP1, DISPATCH_GL(gc.threshold)(DISPATCH)
+    |  lp TMP1, DISPATCH_GL(gc.threshold)(DISPATCH)
     |   stp BASE, L->base
-    |  cmplw TMP0, TMP1
+    |  cmpld TMP0, TMP1
     |   stp PC, SAVE_PC
     |  bge >5
     |1:
@@ -4555,16 +4555,16 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
       |  bl extern lj_tab_new  // (lua_State *L, int32_t asize, uint32_t hbits)
       |  // Returns Table *.
     } else {
-      |  srwi TMP1, RD, 1
-      |  subfic TMP1, TMP1, -4
-      |  lwzx CARG2, KBASE, TMP1		// KBASE-4-tab_const*4
+      |  subfic TMP1, RD, -8
+      |  ldx CARG2, KBASE, TMP1		// KBASE - (tab_const+1)*8
       |  bl extern lj_tab_dup  // (lua_State *L, Table *kt)
       |  // Returns Table *.
     }
     |  lp BASE, L->base
-    |   li TMP0, LJ_TTAB
-    |  stwux TMP0, RA, BASE
-    |  stw TAB:CRET1, 4(RA)
+    |   li ITYPE, LJ_TTAB
+    |   sldi ITYPE, ITYPE, 47
+    |  or TAB:CRET1, TAB:CRET1, ITYPE	// GC64: tag the table.
+    |  stdux TAB:CRET1, RA, BASE
     |  ins_next
     if (op == BC_TNEW) {
       |3:
@@ -4713,34 +4713,24 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_TGETB:
     |  // RA = dst*8, RB = table*8, RC = index*8
-    |  lwzux CARG1, RB, BASE
-    |   srwi TMP0, RC, 3
-    |   lwz TAB:RB, 4(RB)
+    |  add RB, RB, BASE
+    |   srwi TMP0, RC, 3			// index
+    |  ld CARG1, 0(RB)			// table TValue
     |  checktab CARG1; bne ->vmeta_tgetb
+    |  mr TAB:RB, CARG1
     |  lwz TMP1, TAB:RB->asize
-    |   lwz TMP2, TAB:RB->array
-    |  cmplw TMP0, TMP1; bge ->vmeta_tgetb
-    |.if FPU
-    |  lwzx TMP1, TMP2, RC
-    |   lfdx f0, TMP2, RC
-    |.else
-    |  lwzux TMP1, TMP2, RC
-    |   lwz TMP3, 4(TMP2)
-    |.endif
-    |  checknil TMP1; beq >5
+    |   lp TMP2, TAB:RB->array
+    |  cmplw TMP0, TMP1; bge ->vmeta_tgetb	// index >= asize?
+    |  ldx TMP1, TMP2, RC		// array[index] TValue (RC = index*8).
+    |  cmpd TMP1, TISNIL; beq >5
     |1:
     |  ins_next1
-    |.if FPU
-    |   stfdx f0, BASE, RA
-    |.else
-    |   stwux TMP1, RA, BASE
-    |   stw TMP3, 4(RA)
-    |.endif
+    |   stdx TMP1, BASE, RA
     |  ins_next2
     |
     |5:  // Check for __index if table value is nil.
-    |  lwz TAB:TMP2, TAB:RB->metatable
-    |  cmplwi TAB:TMP2, 0
+    |  lp TAB:TMP2, TAB:RB->metatable
+    |  cmpdi TAB:TMP2, 0
     |  beq <1				// No metatable: done.
     |  lbz TMP2, TAB:TMP2->nomm
     |  andix. TMP2, TMP2, 1<<MM_index
@@ -4861,55 +4851,45 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_TSETS:
     |  // RA = src*8, RB = table*8, RC = str_const*8 (~)
-    |  lwzux CARG1, RB, BASE
-    |   srwi TMP1, RC, 1
-    |    lwz TAB:RB, 4(RB)
-    |   subfic TMP1, TMP1, -4
+    |  add RB, RB, BASE
+    |   subfic TMP1, RC, -8
+    |  ld CARG1, 0(RB)			// GC64: table TValue.
+    |   ldx STR:RC, KBASE, TMP1		// String const (raw GCRef ptr).
     |  checktab CARG1
-    |   lwzx STR:RC, KBASE, TMP1	// KBASE-4-str_const*4
     |  bne ->vmeta_tsets1
+    |  mr TAB:RB, CARG1
     |->BC_TSETS_Z:
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = src*8
     |  lwz TMP0, TAB:RB->hmask
     |  lwz TMP1, STR:RC->sid
-    |  lwz NODE:TMP2, TAB:RB->node
+    |  lp NODE:TMP2, TAB:RB->node
     |    stb ZERO, TAB:RB->nomm		// Clear metamethod cache.
     |  and TMP1, TMP1, TMP0		// idx = str->sid & tab->hmask
-    |.if FPU
-    |    lfdx f14, BASE, RA
-    |.else
-    |    add CARG2, BASE, RA
-    |    lwz SAVE0, 0(CARG2)
-    |    lwz SAVE1, 4(CARG2)
-    |.endif
+    |   li ITYPE, LJ_TSTR
     |  slwi TMP0, TMP1, 5
     |  slwi TMP1, TMP1, 3
-    |  sub TMP1, TMP0, TMP1
+    |   sldi ITYPE, ITYPE, 47
+    |  sub TMP1, TMP0, TMP1		// idx*24 (sizeof(Node)).
     |    lbz TMP3, TAB:RB->marked
-    |  add NODE:TMP2, NODE:TMP2, TMP1	// node = tab->node + (idx*32-idx*8)
+    |  add NODE:TMP2, NODE:TMP2, TMP1	// node = tab->node + idx*24
+    |   or CARG1, STR:RC, ITYPE		// Tagged search key.
+    |    ldx SAVE0, BASE, RA		// Value to store.
     |1:
-    |  lwz CARG1, NODE:TMP2->key
-    |   lwz TMP0, 4+offsetof(Node, key)(NODE:TMP2)
-    |    lwz CARG2, NODE:TMP2->val
-    |     lwz NODE:TMP1, NODE:TMP2->next
-    |  checkstr CARG1; bne >5
-    |   cmpw TMP0, STR:RC; bne >5
-    |    checknil CARG2; beq >4		// Key found, but nil value?
+    |  lp TMP0, NODE:TMP2->key
+    |   lp CARG2, NODE:TMP2->val
+    |    lp NODE:TMP1, NODE:TMP2->next
+    |  cmpd TMP0, CARG1; bne >5
+    |   cmpd CARG2, TISNIL; beq >4	// Key found, but nil value?
     |2:
     |  andix. TMP0, TMP3, LJ_GC_BLACK	// isblack(table)
-    |.if FPU
-    |    stfd f14, NODE:TMP2->val
-    |.else
-    |    stw SAVE0, NODE:TMP2->val.u32.hi
-    |    stw SAVE1, NODE:TMP2->val.u32.lo
-    |.endif
+    |   std SAVE0, NODE:TMP2->val
     |  bne >7
     |3:
     |  ins_next
     |
     |4:  // Check for __newindex if previous value is nil.
-    |  lwz TAB:TMP1, TAB:RB->metatable
-    |  cmplwi TAB:TMP1, 0
+    |  lp TAB:TMP1, TAB:RB->metatable
+    |  cmpdi TAB:TMP1, 0
     |  beq <2				// No metatable: done.
     |  lbz TMP0, TAB:TMP1->nomm
     |  andix. TMP0, TMP0, 1<<MM_newindex
@@ -4917,17 +4897,17 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  b ->vmeta_tsets
     |
     |5:  // Follow hash chain.
-    |  cmplwi NODE:TMP1, 0
+    |  cmpdi NODE:TMP1, 0
     |   mr NODE:TMP2, NODE:TMP1
     |  bne <1
     |  // End of hash chain: key not found, add a new one.
     |
     |  // But check for __newindex first.
-    |  lwz TAB:TMP1, TAB:RB->metatable
+    |  lp TAB:TMP1, TAB:RB->metatable
     |   la CARG3, DISPATCH_GL(tmptv)(DISPATCH)
     |   stp PC, SAVE_PC
     |   mr CARG1, L
-    |  cmplwi TAB:TMP1, 0
+    |  cmpdi TAB:TMP1, 0
     |   stp BASE, L->base
     |  beq >6				// No metatable: continue.
     |  lbz TMP0, TAB:TMP1->nomm
@@ -4935,18 +4915,14 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  beq ->vmeta_tsets		// 'no __newindex' flag NOT set: check.
     |6:
     |  li TMP0, LJ_TSTR
-    |   stw STR:RC, 4(CARG3)
+    |  sldi TMP0, TMP0, 47
+    |  or TMP0, STR:RC, TMP0		// Tagged key TValue.
+    |   std TMP0, 0(CARG3)
     |   mr CARG2, TAB:RB
-    |  stw TMP0, 0(CARG3)
     |  bl extern lj_tab_newkey		// (lua_State *L, GCtab *t, TValue *k)
     |  // Returns TValue *.
     |  lp BASE, L->base
-    |.if FPU
-    |  stfd f14, 0(CRET1)
-    |.else
-    |  stw SAVE0, 0(CRET1)
-    |  stw SAVE1, 4(CRET1)
-    |.endif
+    |  std SAVE0, 0(CRET1)
     |  b <3				// No 2nd write barrier needed.
     |
     |7:  // Possible table write barrier for the value. Skip valiswhite check.
@@ -5047,18 +5023,20 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  add RA, BASE, RA
     |1:
     |   add TMP3, KBASE, RD
-    |  lwz TAB:CARG2, -4(RA)		// Guaranteed to be a table.
+    |  ld TAB:CARG2, -8(RA)		// Table TValue (guaranteed a table).
     |    addic. TMP0, MULTRES, -8
-    |   lwz TMP3, 4(TMP3)		// Integer constant is in lo-word.
+    |   ld TMP3, 0(TMP3)			// Start-index constant TValue.
+    |  rldicl TAB:CARG2, TAB:CARG2, 0, 17	// Mask to table ptr.
+    |   clrldi TMP3, TMP3, 32		// Integer start index.
     |    srwi CARG3, TMP0, 3
     |    beq >4				// Nothing to copy?
     |  add CARG3, CARG3, TMP3
     |  lwz TMP2, TAB:CARG2->asize
-    |   slwi TMP1, TMP3, 3
+    |   sldi TMP1, TMP3, 3
     |    lbz TMP3, TAB:CARG2->marked
     |  cmplw CARG3, TMP2
     |   add TMP2, RA, TMP0
-    |   lwz TMP0, TAB:CARG2->array
+    |   lp TMP0, TAB:CARG2->array
     |  bgt >5
     |   add TMP1, TMP1, TMP0
     |    andix. TMP0, TMP3, LJ_GC_BLACK	// isblack(table)
