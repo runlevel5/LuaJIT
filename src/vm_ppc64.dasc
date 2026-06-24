@@ -3738,13 +3738,17 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_NOT:
     |  // RA = dst*8, RD = src*8
-    |  ins_next1
-    |  lwzx TMP0, BASE, RD
-    |  .gpr64 extsw TMP0, TMP0
-    |  subfic TMP1, TMP0, LJ_TTRUE
-    |  adde TMP0, TMP0, TMP1
-    |  stwx TMP0, BASE, RA
-    |  ins_next2
+    |  ldx TMP0, BASE, RD			// GC64: full TValue.
+    |  li TMP1, 1
+    |  sldi TMP1, TMP1, 47
+    |  not TMP1, TMP1			// mov_false = ~(1<<47).
+    |  li TMP2, 2
+    |  sldi TMP2, TMP2, 47
+    |  not TMP2, TMP2			// mov_true = ~(2<<47).
+    |  cmpld cr0, TMP0, TMP1		// Truthy iff src < ~(1<<47).
+    |  isel TMP0, TMP1, TMP2, 4*cr0+lt	// truthy -> false, falsy -> true.
+    |  stdx TMP0, BASE, RA
+    |  ins_next
     break;
   case BC_UNM:
     |  // RA = dst*8, RD = src*8
