@@ -1983,20 +1983,17 @@ static void build_subroutines(BuildCtx *ctx)
   |//-- Math library -------------------------------------------------------
   |
   |.ffunc_1 math_abs
-  |  checknum CARG3
-  |.if DUALNUM
-  |  bne >2
-  |  srawi TMP1, CARG1, 31
-  |  xor TMP2, TMP1, CARG1
-  |.if GPR64
-  |  lus TMP0, 0x8000
-  |  sub CARG1, TMP2, TMP1
-  |  cmplw CARG1, TMP0
-  |  beq >1
-  |.else
-  |  sub. CARG1, TMP2, TMP1
-  |  blt >1
-  |.endif
+  |  srdi TMP0, CARG3, 32
+  |  cmplw TMP0, TISNUMhi
+  |  bgt ->fff_fallback			// Not a number.
+  |  bne >2				// Double; integer falls through.
+  |  extsw TMP1, CARG3
+  |  srawi TMP0, TMP1, 31		// Sign mask.
+  |  xor TMP1, TMP1, TMP0
+  |  subf CRET1, TMP0, TMP1		// CRET1 = abs(integer value).
+  |  lus TMP0, 0x8000			// 2^31.
+  |  cmplw CRET1, TMP0
+  |  beq >1				// abs(INT_MIN) overflows int32.
   |->fff_resi:
   |  lp PC, FRAME_PC(BASE)
   |  la RA, -16(BASE)			// GC64/FR2 result slot.
@@ -2004,15 +2001,14 @@ static void build_subroutines(BuildCtx *ctx)
   |  add CRET1, CRET1, TISNUM		// Tag as integer TValue.
   |  std CRET1, -16(BASE)
   |  b ->fff_res1
-  |1:
-  |  lus CARG3, 0x41e0	// 2^31.
-  |  li CARG1, 0
+  |1:  // Integer abs overflow -> 2^31 as a double.
+  |  lus TMP0, 0x41e0
+  |  sldi CARG3, TMP0, 32
   |  b ->fff_restv
-  |2:
-  |.endif
-  |  bge ->fff_fallback
-  |  rlwinm CARG3, CARG3, 0, 1, 31
-  |  // Fallthrough.
+  |2:  // Double: native FP absolute value.
+  |  lfd FARG1, 0(BASE)
+  |  fabs FARG1, FARG1
+  |  b ->fff_resn
   |
   |->fff_restv:
   |  // CARG3 = TValue result.
@@ -2058,83 +2054,16 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.macro math_round, func
   |  .ffunc_1 math_ .. func
-  |   checknum CARG3; beqy ->fff_restv
-  |  rlwinm TMP2, CARG3, 12, 21, 31
-  |   bge ->fff_fallback
-  |  addic. TMP2, TMP2, -1023		// exp = exponent(x) - 1023
-  |  cmplwi cr1, TMP2, 31		// 0 <= exp < 31?
-  |   subfic TMP0, TMP2, 31
-  |  blt >3
-  |  slwi TMP1, CARG3, 11
-  |   srwi TMP3, CARG1, 21
-  |  oris TMP1, TMP1, 0x8000
-  |   addi TMP2, TMP2, 1
-  |  or TMP1, TMP1, TMP3
-  |   slwi CARG2, CARG1, 11
-  |  bge cr1, >4
-  |   slw TMP3, TMP1, TMP2
-  |  srw RD, TMP1, TMP0
-  |   or TMP3, TMP3, CARG2
-  |  srawi TMP2, CARG3, 31
-  |.if "func" == "floor"
-  |  and TMP1, TMP3, TMP2
-  |  addic TMP0, TMP1, -1
-  |  subfe TMP1, TMP0, TMP1
-  |  add CARG1, RD, TMP1
-  |  xor CARG1, CARG1, TMP2
-  |  sub CARG1, CARG1, TMP2
-  |  b ->fff_resi
-  |.else
-  |  andc TMP1, TMP3, TMP2
-  |  addic TMP0, TMP1, -1
-  |  subfe TMP1, TMP0, TMP1
-  |  add CARG1, RD, TMP1
-  |  cmpw CARG1, RD
-  |  xor CARG1, CARG1, TMP2
-  |  sub CARG1, CARG1, TMP2
-  |  bge ->fff_resi
-  |  // Overflow to 2^31.
-  |  lus CARG3, 0x41e0			// 2^31.
-  |  li CARG1, 0
-  |  b ->fff_restv
-  |.endif
-  |3:  // |x| < 1
-  |  slwi TMP2, CARG3, 1
-  |   srawi TMP1, CARG3, 31
-  |  or TMP2, CARG1, TMP2		// ztest = (hi+hi) | lo
-  |.if "func" == "floor"
-  |  and TMP1, TMP2, TMP1		// (ztest & sign) == 0 ? 0 : -1
-  |  subfic TMP2, TMP1, 0
-  |  subfe CARG1, CARG1, CARG1
-  |.else
-  |  andc TMP1, TMP2, TMP1		// (ztest & ~sign) == 0 ? 0 : 1
-  |  addic TMP2, TMP1, -1
-  |  subfe CARG1, TMP2, TMP1
-  |.endif
-  |  b ->fff_resi
-  |4:  // exp >= 31. Check for -(2^31).
-  |  xoris TMP1, TMP1, 0x8000
-  |  srawi TMP2, CARG3, 31
-  |.if "func" == "floor"
-  |  or TMP1, TMP1, CARG2
-  |.endif
-  |.if PPE
-  |  orc TMP1, TMP1, TMP2
-  |  cmpwi TMP1, 0
-  |.else
-  |  orc. TMP1, TMP1, TMP2
-  |.endif
-  |  crand 4*cr0+eq, 4*cr0+eq, 4*cr1+eq
-  |  lus CARG1, 0x8000			// -(2^31).
-  |  beqy ->fff_resi
-  |5:
-  |.if FPU
+  |  srdi TMP0, CARG3, 32
+  |  cmplw TMP0, TISNUMhi
+  |  beq ->fff_restv			// Integer: already rounded (return as-is).
+  |  bgt ->fff_fallback			// Not a number.
   |  lfd FARG1, 0(BASE)
+  |.if "func" == "floor"
+  |  frim FARG1, FARG1			// Native round toward -inf.
   |.else
-  |  lwz CARG1, 0(BASE)
-  |  lwz CARG2, 4(BASE)
+  |  frip FARG1, FARG1			// Native round toward +inf.
   |.endif
-  |  blex func
   |  b ->fff_resn
   |.endmacro
   |
