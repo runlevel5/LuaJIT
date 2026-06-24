@@ -220,16 +220,16 @@
 |.define SAVE_GPR_,	112     // .. 112+18*8: 64 bit GPR saves.
 |//			48(sp)  // Callee parameter save area (ABI mandated).
 |.define SAVE_TOC,	40(sp)  // TOC save area.
-|.define TMPD_LO,	36(sp)  // \ Link editor temp (ABI mandated).
-|.define TMPD_HI,	32(sp)  // /
+|.define TMPD_LO,	32(sp)  // \ GC64/LE: low word at the lower address.
+|.define TMPD_HI,	36(sp)  // /
 |.define TONUM_LO,	28(sp)  // \ Compiler temp (ABI mandated).
 |.define TONUM_HI,	24(sp)  // /
 |// Next frame lr:	16(sp)
 |.define SAVE_CR,	8(sp)  // 64 bit CR save.
 |// Back chain for sp:	0(sp)	<-- sp while in interpreter
 |
-|.define TMPD_BLO,	39(sp)
-|.define TMPD,		TMPD_HI
+|.define TMPD_BLO,	32(sp)		// GC64/LE: low byte at the lower address.
+|.define TMPD,		TMPD_LO
 |.define TONUM_D,	TONUM_HI
 |
 |.endif
@@ -2378,7 +2378,10 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro .ffunc_bit, name
   |.if DUALNUM
   |  .ffunc_1 bit_..name
-  |  checknum CARG3; bnel ->fff_tobit_fb
+  |  srdi TMP0, CARG3, 32
+  |  clrldi CARG1, CARG3, 32		// GC64: integer value (low 32).
+  |  cmplw cr0, TMP0, TISNUMhi
+  |  bnel ->fff_tobit_fb
   |.else
   |  .ffunc_n bit_..name
   |  fadd FARG1, FARG1, TOBIT
@@ -2392,15 +2395,16 @@ static void build_subroutines(BuildCtx *ctx)
   |  addi SAVE0, BASE, 8
   |  add SAVE1, BASE, NARGS8:RC
   |1:
-  |  lwz CARG4, 0(SAVE0)
+  |  ld CARG4, 0(SAVE0)
   |   cmplw cr1, SAVE0, SAVE1
   |.if DUALNUM
-  |  lwz CARG2, 4(SAVE0)
+  |  clrldi CARG2, CARG4, 32		// GC64: integer value (low 32).
   |.else
   |  lfd FARG1, 0(SAVE0)
   |.endif
   |   bgey cr1, ->fff_resi
-  |  checknum CARG4
+  |  srdi TMP0, CARG4, 32
+  |  cmplw cr0, TMP0, TISNUMhi
   |.if DUALNUM
   |.if FPU
   |  bnel ->fff_bitop_fb
@@ -2441,16 +2445,17 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro .ffunc_bit_sh, name, ins, shmod
   |.if DUALNUM
   |  .ffunc_2 bit_..name
-  |.if FPU
-  |  checknum CARG3; bnel ->fff_tobit_fb
-  |.else
-  |  checknum CARG3; beq >1
-  |  bl ->fff_tobit_fb
-  |  lwz CARG2, 12(BASE)	// Conversion polluted CARG2.
-  |1:
-  |.endif
+  |  ld CARG3, 0(BASE)			// GC64: re-load args as 64-bit TValues.
+  |  ld CARG4, 8(BASE)
+  |  clrldi CARG1, CARG3, 32		// arg0 integer value (low 32).
+  |  clrldi CARG2, CARG4, 32		// arg1 integer value (low 32).
+  |  srdi TMP0, CARG3, 32
+  |  cmplw cr0, TMP0, TISNUMhi
+  |  bnel ->fff_tobit_fb		// 1st arg: convert if double.
   |  // Note: no inline conversion from number for 2nd argument!
-  |  checknum CARG4; bne ->fff_fallback
+  |  srdi TMP0, CARG4, 32
+  |  cmplw cr0, TMP0, TISNUMhi
+  |  bne ->fff_fallback
   |.else
   |  .ffunc_nn bit_..name
   |  fadd FARG1, FARG1, TOBIT
