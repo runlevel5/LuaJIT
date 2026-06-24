@@ -2417,17 +2417,18 @@ static void build_subroutines(BuildCtx *ctx)
   |  .ffunc string_ .. name
   |  ffgccheck
   |  cmplwi NARGS8:RC, 8
-  |   lwz CARG3, 0(BASE)
-  |    lwz STR:CARG2, 4(BASE)
+  |   ld CARG3, 0(BASE)			// src TValue.
   |  blt ->fff_fallback
-  |  checkstr CARG3
+  |   sradi ITYPE, CARG3, 47
+  |   rldicl STR:CARG2, CARG3, 0, 17	// Mask to string ptr.
+  |  cmpdi ITYPE, LJ_TSTR
   |   la SBUF:CARG1, DISPATCH_GL(tmpbuf)(DISPATCH)
   |  bne ->fff_fallback
-  |   lwz TMP0, SBUF:CARG1->b
-  |  stw L, SBUF:CARG1->L
+  |   lp TMP0, SBUF:CARG1->b
+  |  stp L, SBUF:CARG1->L
   |  stp BASE, L->base
   |  stp PC, SAVE_PC
-  |   stw TMP0, SBUF:CARG1->w
+  |   stp TMP0, SBUF:CARG1->w
   |  bl extern lj_buf_putstr_ .. name
   |  bl extern lj_buf_tostr
   |  b ->fff_resstr
@@ -3919,26 +3920,23 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_LEN:
     |  // RA = dst*8, RD = src*8
-    |  lwzux TMP0, RD, BASE
-    |   lwz CARG1, 4(RD)
-    |  checkstr TMP0; bne >2
+    |  add RD, RD, BASE
+    |  ld CARG1, 0(RD)			// src TValue.
+    |  sradi ITYPE, CARG1, 47		// itype.
+    |  rldicl CARG1, CARG1, 0, 17	// Mask to GC ptr.
+    |  cmpdi ITYPE, LJ_TSTR; bne >2
     |  lwz CRET1, STR:CARG1->len
     |1:
-    |.if DUALNUM
+    |  clrldi CRET1, CRET1, 32
+    |  add CRET1, CRET1, TISNUM		// GC64: tag length as integer.
     |  ins_next1
-    |  stwux TISNUM, RA, BASE
-    |   stw CRET1, 4(RA)
-    |.else
-    |  tonum_u f0, CRET1		// Result is a non-negative integer.
-    |  ins_next1
-    |  stfdx f0, BASE, RA
-    |.endif
+    |  stdux CRET1, RA, BASE
     |  ins_next2
     |2:
-    |  checktab TMP0; bne ->vmeta_len
+    |  cmpdi ITYPE, LJ_TTAB; bne ->vmeta_len
 #if LJ_52
-    |  lwz TAB:TMP2, TAB:CARG1->metatable
-    |  cmplwi TAB:TMP2, 0
+    |  lp TAB:TMP2, TAB:CARG1->metatable
+    |  cmpdi TAB:TMP2, 0
     |  bne >9
     |3:
 #endif
