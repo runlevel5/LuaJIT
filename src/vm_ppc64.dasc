@@ -890,15 +890,15 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |->cont_dispatch:
   |  // BASE = meta base, RA = resultptr, RD = (nresults+1)*8
-  |  lwz TMP0, -12(BASE)		// Continuation. (NYI GC64: FR1 -- whole
-  |   mr RB, BASE			// metamethod-continuation frame is still FR1;
-  |   mr BASE, TMP2			// fn metamethods (__index/__add fns) need it.)
+  |  lp TMP0, -32(BASE)		// GC64/FR2: continuation (cont @ meta_base-32).
+  |   mr RB, BASE
+  |   mr BASE, TMP2			// Restore caller BASE.
   |    lp LFUNC:TMP1, FRAME_FUNC(TMP2)
   |    rldicl TMP1, TMP1, 0, 17
   |.if FFI
-  |  cmplwi TMP0, 1
+  |  cmpldi TMP0, 1
   |.endif
-  |     lwz PC, -16(RB)			// Restore PC from [cont|PC].
+  |     lp PC, -24(RB)			// Restore PC from [cont|PC] (PC @ meta_base-24).
   |   subi TMP2, RD, 8
   |   stdx TISNIL, RA, TMP2		// GC64: full 64-bit nil. Ensure one valid arg.
   |.if FFI
@@ -1015,7 +1015,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  // BASE = base, L->top = new base, stack = cont/func/t/k
   |  subfic TMP1, BASE, FRAME_CONT
   |  lp BASE, L->top
-  |  stw PC, -16(BASE)			// [cont|PC]
+  |  std PC, -24(BASE)			// GC64/FR2: [cont|PC], PC @ new_base-24.
   |   add PC, TMP1, BASE
   |  lp LFUNC:RB, FRAME_FUNC(BASE)
   |  rldicl RB, RB, 0, 17
@@ -1052,12 +1052,14 @@ static void build_subroutines(BuildCtx *ctx)
   |->vmeta_tsets:
   |  la CARG2, DISPATCH_GL(tmptv)(DISPATCH)
   |  li TMP0, LJ_TTAB
-  |  stw TAB:RB, 4(CARG2)
+  |  sldi TMP0, TMP0, 47
+  |  or TMP0, TAB:RB, TMP0		// GC64: tagged table TValue.
+  |  std TMP0, 0(CARG2)
   |   la CARG3, DISPATCH_GL(tmptv2)(DISPATCH)
-  |  stw TMP0, 0(CARG2)
   |   li TMP1, LJ_TSTR
-  |   stw STR:RC, 4(CARG3)
-  |   stw TMP1, 0(CARG3)
+  |   sldi TMP1, TMP1, 47
+  |   or TMP1, STR:RC, TMP1		// GC64: tagged string key TValue.
+  |   std TMP1, 0(CARG3)
   |  b >1
   |
   |->vmeta_tsetb:			// TMP0 = index
@@ -1080,7 +1082,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  stp PC, SAVE_PC
   |  bl extern lj_meta_tset		// (lua_State *L, TValue *o, TValue *k)
   |  // Returns TValue * (finished) or NULL (metamethod).
-  |  cmplwi CRET1, 0
+  |  cmpdi CRET1, 0
   |.if FPU
   |   lfdx f0, BASE, RA
   |.else
@@ -1102,7 +1104,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  // BASE = base, L->top = new base, stack = cont/func/t/k/(v)
   |  subfic TMP1, BASE, FRAME_CONT
   |  lp BASE, L->top
-  |  stw PC, -16(BASE)			// [cont|PC]
+  |  std PC, -24(BASE)			// GC64/FR2: [cont|PC], PC @ new_base-24.
   |   add PC, TMP1, BASE
   |  lp LFUNC:RB, FRAME_FUNC(BASE)
   |  rldicl RB, RB, 0, 17
@@ -1277,7 +1279,7 @@ static void build_subroutines(BuildCtx *ctx)
   |->vmeta_binop:
   |  // BASE = old base, CRET1 = new base, stack = cont/func/o1/o2
   |  sub TMP1, CRET1, BASE
-  |   stw PC, -16(CRET1)		// [cont|PC]
+  |   std PC, -24(CRET1)		// GC64/FR2: [cont|PC], PC @ new_base-24.
   |   mr TMP2, BASE
   |  addi PC, TMP1, FRAME_CONT
   |   mr BASE, CRET1
