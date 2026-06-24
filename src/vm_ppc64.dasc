@@ -4475,10 +4475,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_KPRI:
     |  // RA = dst*8, RD = primitive_type*8 (~)
-    |  srwi TMP1, RD, 3
-    |  not TMP0, TMP1
+    |  srwi TMP0, RD, 3			// TMP0 = primitive_type.
+    |  sldi TMP0, TMP0, 47
+    |  not TMP0, TMP0			// GC64: ~(primitive_type << 47).
     |  ins_next1
-    |  stwx TMP0, BASE, RA
+    |  stdx TMP0, BASE, RA
     |  ins_next2
     break;
   case BC_KNIL:
