@@ -488,6 +488,14 @@ endif
 DASM_FLAGS= $(DASM_XFLAGS) $(DASM_AFLAGS)
 DASM_DASC= vm_$(DASM_ARCH).dasc
 
+# PPC64 (ppc64le) uses a separate VM source from 32-bit PPC (cf. mips/mips64),
+# while sharing the lj_*_ppc.h backend headers (gated by LJ_64/LJ_GC64).
+ifneq (,$(findstring LJ_TARGET_PPC ,$(TARGET_TESTARCH)))
+ifneq (,$(findstring LJ_ARCH_BITS 64 ,$(TARGET_TESTARCH)))
+  DASM_DASC= vm_ppc64.dasc
+endif
+endif
+
 GIT= git
 ifeq (Windows,$(HOST_SYS)$(HOST_MSYS))
   GIT_RELVER= if exist ..\.git ( $(GIT) show -s --format=%%ct >luajit_relver.txt ) else ( type ..\.relver >luajit_relver.txt )
