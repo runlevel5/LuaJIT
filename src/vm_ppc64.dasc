@@ -3022,9 +3022,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  stfd f0, -16(sp)
   |  lwa CRET1, -16(sp)			// Sign-extended int32 (LE: low word @ -16).
   |  std CRET1, -8(sp)
-  |  lfd f1, -8(sp)
-  |  fcfid f1, f1			// (double)CRET1.
-  |  fcmpu cr0, f1, FARG1		// Exact round-trip?
+  |  lfd f0, -8(sp)
+  |  fcfid f0, f0			// (double)CRET1 (use f0 -- must NOT clobber FARG1=f1).
+  |  fcmpu cr0, f0, FARG1		// Exact round-trip?
   |  bne >1
   |  blr					// CRET1 already holds the int.
   |1:
