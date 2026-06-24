@@ -890,7 +890,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  ble >1
   |.endif
   |    lwz TMP1, LFUNC:TMP1->pc
-  |    lwz KBASE, PC2PROTO(k)(TMP1)
+  |    lp KBASE, PC2PROTO(k)(TMP1)
   |  // BASE = base, RA = resultptr, RB = meta base
   |  mtctr TMP0
   |  bctr				// Jump to continuation.
@@ -3063,7 +3063,7 @@ static void build_subroutines(BuildCtx *ctx)
   |   stw MULTRES, SAVE_MULTRES
   |  lwz TMP1, LFUNC:RB->pc
   |    stw TMP2, DISPATCH_GL(jit_base)(DISPATCH)
-  |  lwz KBASE, PC2PROTO(k)(TMP1)
+  |  lp KBASE, PC2PROTO(k)(TMP1)
   |  // Setup type comparison constants.
   |  init_tisnum
   |  .FPU lus TMP3, 0x59c0		// TOBIT = 2^52 + 2^51 (float).
@@ -3106,7 +3106,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  sub TMP1, BASE, TMP0
   |  lwz LFUNC:TMP2, -12(TMP1)
   |  lwz TMP1, LFUNC:TMP2->pc
-  |  lwz KBASE, PC2PROTO(k)(TMP1)
+  |  lp KBASE, PC2PROTO(k)(TMP1)
   |3:
   |   subi RC, MULTRES, 8
   |   add RA, RA, BASE
@@ -4691,11 +4691,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // RA = dst*8, RD = str_const*8 (~)
   case BC_GSET:
     |  // RA = src*8, RD = str_const*8 (~)
-    |  lwz LFUNC:TMP2, FRAME_FUNC(BASE)
-    |   srwi TMP1, RD, 1
-    |  lwz TAB:RB, LFUNC:TMP2->env
-    |   subfic TMP1, TMP1, -4
-    |   lwzx STR:RC, KBASE, TMP1	// KBASE-4-str_const*4
+    |  lp LFUNC:TMP2, FRAME_FUNC(BASE)
+    |   subfic TMP1, RD, -8
+    |  rldicl LFUNC:TMP2, TMP2, 0, 17	// Mask func TValue -> GCfunc pointer.
+    |  lp TAB:RB, LFUNC:TMP2->env	// env is a raw GCRef pointer (GC64).
+    |   ldx STR:RC, KBASE, TMP1		// KBASE - (str_const+1)*8 (8-byte consts).
     if (op == BC_GGET) {
       |  b ->BC_TGETS_Z
     } else {
@@ -4785,35 +4785,34 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = dst*8
     |  lwz TMP0, TAB:RB->hmask
     |  lwz TMP1, STR:RC->sid
-    |  lwz NODE:TMP2, TAB:RB->node
+    |  lp NODE:TMP2, TAB:RB->node
     |  and TMP1, TMP1, TMP0		// idx = str->sid & tab->hmask
     |  slwi TMP0, TMP1, 5
     |  slwi TMP1, TMP1, 3
-    |  sub TMP1, TMP0, TMP1
-    |  add NODE:TMP2, NODE:TMP2, TMP1	// node = tab->node + (idx*32-idx*8)
+    |  li ITYPE, LJ_TSTR
+    |  sub TMP1, TMP0, TMP1		// idx * sizeof(Node) (GC64: 24 = 32-8).
+    |  sldi ITYPE, ITYPE, 47
+    |  add NODE:TMP2, NODE:TMP2, TMP1	// node = tab->node + idx*sizeof(Node)
+    |  or TMP3, STR:RC, ITYPE		// Tagged search key: STR | (LJ_TSTR<<47).
     |1:
-    |  lwz CARG1, NODE:TMP2->key
-    |   lwz TMP0, 4+offsetof(Node, key)(NODE:TMP2)
-    |    lwz CARG2, NODE:TMP2->val
-    |     lwz TMP1, 4+offsetof(Node, val)(NODE:TMP2)
-    |  checkstr CARG1; bne >4
-    |   cmpw TMP0, STR:RC; bne >4
-    |    checknil CARG2; beq >5		// Key found, but nil value?
+    |  lp CARG1, NODE:TMP2->key		// Tagged key TValue.
+    |   lp CARG2, NODE:TMP2->val		// Value TValue.
+    |  cmpd CARG1, TMP3; bne >4
+    |   cmpd CARG2, TISNIL; beq >5	// Key found, but nil value?
     |3:
-    |    stwux CARG2, RA, BASE
-    |     stw TMP1, 4(RA)
+    |    stdux CARG2, RA, BASE
     |  ins_next
     |
     |4:  // Follow hash chain.
-    |  lwz NODE:TMP2, NODE:TMP2->next
-    |  cmplwi NODE:TMP2, 0
+    |  lp NODE:TMP2, NODE:TMP2->next
+    |  cmpdi NODE:TMP2, 0
     |  bne <1
     |  // End of hash chain: key not found, nil result.
-    |   li CARG2, LJ_TNIL
+    |   mr CARG2, TISNIL
     |
     |5:  // Check for __index if table value is nil.
-    |  lwz TAB:TMP2, TAB:RB->metatable
-    |  cmplwi TAB:TMP2, 0
+    |  lp TAB:TMP2, TAB:RB->metatable
+    |  cmpdi TAB:TMP2, 0
     |  beq <3				// No metatable: done.
     |  lbz TMP0, TAB:TMP2->nomm
     |  andix. TMP0, TMP0, 1<<MM_index
@@ -5280,7 +5279,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  sub TMP1, BASE, RA
     |  lwz LFUNC:TMP1, FRAME_FUNC-8(TMP1)
     |  lwz TMP1, LFUNC:TMP1->pc
-    |  lwz KBASE, PC2PROTO(k)(TMP1)	// Need to prepare KBASE.
+    |  lp KBASE, PC2PROTO(k)(TMP1)	// Need to prepare KBASE.
     |  b <4
     |
     |7:  // Tailcall from a vararg function.
@@ -5626,7 +5625,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz LFUNC:TMP1, FRAME_FUNC(BASE)
     |  ins_next1
     |  lwz TMP1, LFUNC:TMP1->pc
-    |  lwz KBASE, PC2PROTO(k)(TMP1)
+    |  lp KBASE, PC2PROTO(k)(TMP1)
     |  ins_next2
     |
     |6:  // Fill up results with nil.
@@ -5675,7 +5674,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz LFUNC:TMP1, FRAME_FUNC(BASE)
     |  ins_next1
     |  lwz TMP1, LFUNC:TMP1->pc
-    |  lwz KBASE, PC2PROTO(k)(TMP1)
+    |  lp KBASE, PC2PROTO(k)(TMP1)
     |  ins_next2
     |
     |6:  // Fill up results with nil.
@@ -5979,7 +5978,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  // BASE = new base, RA = BASE+framesize*8, RB = LFUNC, RC = nargs*8
     |  lwz TMP2, L->maxstack
     |   lbz TMP1, -4+PC2PROTO(numparams)(PC)
-    |    lwz KBASE, -4+PC2PROTO(k)(PC)
+    |    lp KBASE, -4+PC2PROTO(k)(PC)
     |  cmplw RA, TMP2
     |   slwi TMP1, TMP1, 3
     |  bgt ->vm_growstack_l
@@ -6020,7 +6019,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  subi TMP2, TMP2, 8
     |   addi TMP3, RC, 16+FRAME_VARG	// FR2: delta spans 2 frame slots.
     |   std LFUNC:RB, 0(TMP1)		// [func] = tagged LFUNC.
-    |    lwz KBASE, -4+PC2PROTO(k)(PC)
+    |    lp KBASE, -4+PC2PROTO(k)(PC)
     |  cmplw TMP0, TMP2
     |   std TMP3, 8(TMP1)		// [frame-link] = delta + FRAME_VARG.
     |  bge ->vm_growstack_l
@@ -6029,6 +6028,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   mr RC, TMP1			// RC = loop bound (end of old args).
     |   addi BASE, TMP1, 16		// FR2: new base past [func][link].
     |   addi TMP1, TMP1, 16		// TMP1 = fixarg dest.
+    |  ins_next1			// Load next INS + advance PC (after proto reads).
     |  cmpwi TMP2, 0
     |  beq >3
     |1:
