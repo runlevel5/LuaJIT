@@ -2344,37 +2344,24 @@ static void build_subroutines(BuildCtx *ctx)
   |.ffunc string_sub
   |  ffgccheck
   |  cmplwi NARGS8:RC, 16
-  |   lwz CARG3, 16(BASE)
-  |.if not DUALNUM
-  |    lfd f0, 16(BASE)
-  |.endif
-  |   lwz TMP0, 0(BASE)
-  |    lwz STR:CARG1, 4(BASE)
+  |   ld STR:CARG1, 0(BASE)		// str TValue.
+  |   ld CARG2, 8(BASE)			// start TValue.
   |  blt ->fff_fallback
-  |   lwz CARG2, 8(BASE)
-  |.if DUALNUM
-  |    lwz TMP1, 12(BASE)
-  |.else
-  |    lfd f1, 8(BASE)
-  |.endif
-  |   li TMP2, -1
-  |  beq >1
-  |.if DUALNUM
-  |  checknum CARG3
-  |   lwz TMP2, 20(BASE)
-  |  bne ->fff_fallback
+  |   li TMP2, -1			// Default end = -1.
+  |   ld CARG3, 16(BASE)		// end TValue (valid if nargs > 2).
+  |  beq >1				// Exactly 2 args: end stays -1.
+  |  srdi TMP0, CARG3, 32
+  |  cmplw TMP0, TISNUMhi
+  |   extsw TMP2, CARG3			// end value.
+  |  bne ->fff_fallback			// end not an integer.
   |1:
-  |  checknum CARG2; bne ->fff_fallback
-  |.else
-  |  checknum CARG3; bge ->fff_fallback
-  |  toint TMP2, f0
-  |1:
-  |  checknum CARG2; bge ->fff_fallback
-  |.endif
-  |  checkstr TMP0; bne ->fff_fallback
-  |.if not DUALNUM
-  |   toint TMP1, f1
-  |.endif
+  |  srdi TMP0, CARG2, 32
+  |  cmplw TMP0, TISNUMhi
+  |   extsw TMP1, CARG2			// start value.
+  |  bne ->fff_fallback			// start not an integer.
+  |  sradi TMP0, STR:CARG1, 47
+  |  rldicl STR:CARG1, STR:CARG1, 0, 17	// Mask to string ptr.
+  |  cmpdi TMP0, LJ_TSTR; bne ->fff_fallback
   |   lwz TMP0, STR:CARG1->len
   |  cmplw TMP0, TMP2			// len < end? (unsigned compare)
   |   addi TMP3, TMP2, 1
@@ -2388,12 +2375,9 @@ static void build_subroutines(BuildCtx *ctx)
   |    addi CARG2, STR:CARG1, #STR-1
   |  srawi TMP0, CARG3, 31
   |   addi CARG3, CARG3, 1
-  |    add CARG2, CARG2, TMP1
+  |    add CARG2, CARG2, TMP1		// GC64: 64-bit data pointer (no truncate).
   |  andc CARG3, CARG3, TMP0
-  |.if GPR64
-  |  rldicl CARG2, CARG2, 0, 32
-  |  rldicl CARG3, CARG3, 0, 32
-  |.endif
+  |  clrldi CARG3, CARG3, 32		// Length as uint32.
   |  b ->fff_newstr
   |
   |5:  // Negative end or overflow.
