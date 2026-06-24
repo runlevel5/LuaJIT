@@ -222,15 +222,15 @@
 |.define SAVE_TOC,	40(sp)  // TOC save area.
 |.define TMPD_LO,	32(sp)  // \ GC64/LE: low word at the lower address.
 |.define TMPD_HI,	36(sp)  // /
-|.define TONUM_LO,	28(sp)  // \ Compiler temp (ABI mandated).
-|.define TONUM_HI,	24(sp)  // /
+|.define TONUM_LO,	24(sp)  // \ GC64/LE: low word at the lower address.
+|.define TONUM_HI,	28(sp)  // /
 |// Next frame lr:	16(sp)
 |.define SAVE_CR,	8(sp)  // 64 bit CR save.
 |// Back chain for sp:	0(sp)	<-- sp while in interpreter
 |
 |.define TMPD_BLO,	32(sp)		// GC64/LE: low byte at the lower address.
 |.define TMPD,		TMPD_LO
-|.define TONUM_D,	TONUM_HI
+|.define TONUM_D,	TONUM_LO
 |
 |.endif
 |.else
@@ -3814,9 +3814,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     ||vk = ((int)op - BC_ADDVN) / (BC_ADDNV-BC_ADDVN);
     ||switch (vk) {
     ||case 0:
-    |   lwzx CARG1, BASE, RB
+    |   ldx CARG1, BASE, RB			// GC64: full TValue for type check.
     |   .if DUALNUM
-    |     lwzx CARG3, KBASE, RC
+    |     ldx CARG3, KBASE, RC
     |   .endif
     |   .if FPU
     |    lfdx f14, BASE, RB
@@ -3828,18 +3828,20 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    lwz CARG4, 4(TMP2)
     |   .endif
     |   .if DUALNUM
-    |     checknum cr0, CARG1
-    |     checknum cr1, CARG3
-    |     crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
+    |     srdi ITYPE, CARG1, 32
+    |     cmplw cr0, ITYPE, TISNUMhi
+    |     srdi ITYPE, CARG3, 32
+    |     cmplw cr1, ITYPE, TISNUMhi
+    |     crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt	// Both doubles?
     |     bge ->vmeta_arith_vn
     |   .else
     |     checknum CARG1; bge ->vmeta_arith_vn
     |   .endif
     ||  break;
     ||case 1:
-    |   lwzx CARG1, BASE, RB
+    |   ldx CARG1, BASE, RB
     |   .if DUALNUM
-    |     lwzx CARG3, KBASE, RC
+    |     ldx CARG3, KBASE, RC
     |   .endif
     |   .if FPU
     |    lfdx f15, BASE, RB
@@ -3851,17 +3853,19 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    lwz CARG4, 4(TMP2)
     |   .endif
     |   .if DUALNUM
-    |     checknum cr0, CARG1
-    |     checknum cr1, CARG3
-    |     crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
+    |     srdi ITYPE, CARG1, 32
+    |     cmplw cr0, ITYPE, TISNUMhi
+    |     srdi ITYPE, CARG3, 32
+    |     cmplw cr1, ITYPE, TISNUMhi
+    |     crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt	// Both doubles?
     |     bge ->vmeta_arith_nv
     |   .else
     |     checknum CARG1; bge ->vmeta_arith_nv
     |   .endif
     ||  break;
     ||default:
-    |   lwzx CARG1, BASE, RB
-    |   lwzx CARG3, BASE, RC
+    |   ldx CARG1, BASE, RB
+    |   ldx CARG3, BASE, RC
     |   .if FPU
     |    lfdx f14, BASE, RB
     |    lfdx f15, BASE, RC
@@ -3871,9 +3875,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    lwz CARG2, 4(TMP1)
     |    lwz CARG4, 4(TMP2)
     |   .endif
-    |   checknum cr0, CARG1
-    |   checknum cr1, CARG3
-    |   crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
+    |   srdi ITYPE, CARG1, 32
+    |   cmplw cr0, ITYPE, TISNUMhi
+    |   srdi ITYPE, CARG3, 32
+    |   cmplw cr1, ITYPE, TISNUMhi
+    |   crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt	// Both doubles?
     |   bge ->vmeta_arith_vv
     ||  break;
     ||}
@@ -4058,9 +4064,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ins_arith intmod, fpmod_, sfpmod
     break;
   case BC_POW:
-    |  // NYI: (partial) integer arithmetic.
-    |  lwzx CARG1, BASE, RB
-    |  lwzx CARG3, BASE, RC
+    |  // GC64: double^double inline; anything else (incl. integers) -> vmeta.
+    |  ldx CARG1, BASE, RB
+    |  ldx CARG3, BASE, RC
     |.if FPU
     |   lfdx FARG1, BASE, RB
     |   lfdx FARG2, BASE, RC
@@ -4070,9 +4076,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   lwz CARG2, 4(TMP1)
     |   lwz CARG4, 4(TMP2)
     |.endif
-    |  checknum cr0, CARG1
-    |  checknum cr1, CARG3
-    |  crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt
+    |  srdi ITYPE, CARG1, 32
+    |  cmplw cr0, ITYPE, TISNUMhi
+    |  srdi ITYPE, CARG3, 32
+    |  cmplw cr1, ITYPE, TISNUMhi
+    |  crand 4*cr0+lt, 4*cr0+lt, 4*cr1+lt	// Both doubles?
     |  bge ->vmeta_arith_vv
     |  blex pow
     |  ins_next1
