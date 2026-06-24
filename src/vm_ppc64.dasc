@@ -3652,16 +3652,18 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     vk = op == BC_ISEQV;
     |  // RA = src1*8, RD = src2*8, JMP with RD = target
     |.if DUALNUM
-    |  lwzux CARG1, RA, BASE
+    |  add RA, RA, BASE
+    |   add RD, RD, BASE
+    |  ld CARG1, 0(RA)			// src1 TValue.
     |    addi PC, PC, 4
-    |   lwz CARG2, 4(RA)
-    |  lwzux CARG3, RD, BASE
-    |  checknum cr0, CARG1
+    |  ld CARG3, 0(RD)			// src2 TValue.
     |    lwz SAVE0, -4(PC)
-    |  checknum cr1, CARG3
+    |  srdi ITYPE, CARG1, 32
+    |   srdi TMP0, CARG3, 32
     |    decode_RD4 SAVE0, SAVE0
-    |   lwz CARG4, 4(RD)
-    |  cror 4*cr7+gt, 4*cr0+gt, 4*cr1+gt
+    |  cmplw cr0, ITYPE, TISNUMhi	// eq=int, lt=num, gt=other.
+    |   cmplw cr1, TMP0, TISNUMhi
+    |  cror 4*cr7+gt, 4*cr0+gt, 4*cr1+gt	// gt if either is non-number.
     |    addis SAVE0, SAVE0, -(BCBIAS_J*4 >> 16)
     if (vk) {
       |  ble cr7, ->BC_ISEQN_Z
@@ -3692,63 +3694,47 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |1:
     |  ins_next
     |.endif
-    |5:  // Either or both types are not numbers.
-    |.if not DUALNUM
-    |    lwz CARG2, 4(RA)
-    |    lwz CARG4, 4(RD)
-    |.endif
+    |5:  // At least one operand is not a number. CARG1/CARG3 = full TValues.
+    |  cmpd CARG1, CARG3			// Bitwise equal (tag and value)?
+    |   sradi ITYPE, CARG1, 47		// src1 itype.
+    |   sradi TMP0, CARG3, 47		// src2 itype.
     |.if FFI
-    |  cmpwi cr7, CARG1, LJ_TCDATA
-    |  cmpwi cr5, CARG3, LJ_TCDATA
-    |.endif
-    |   not TMP2, CARG1
-    |  cmplw CARG1, CARG3
-    |   cmplwi cr1, TMP2, ~LJ_TISPRI		// Primitive?
-    |.if FFI
+    |  cmpdi cr7, ITYPE, LJ_TCDATA
+    |  cmpdi cr5, TMP0, LJ_TCDATA
     |  cror 4*cr7+eq, 4*cr7+eq, 4*cr5+eq
-    |.endif
-    |   cmplwi cr6, TMP2, ~LJ_TISTABUD		// Table or userdata?
-    |.if FFI
     |  beq cr7, ->vmeta_equal_cd
     |.endif
-    |    cmplw cr5, CARG2, CARG4
-    |  crandc 4*cr0+gt, 4*cr0+eq, 4*cr1+gt	// 2: Same type and primitive.
-    |  crorc 4*cr0+lt, 4*cr5+eq, 4*cr0+eq	// 1: Same tv or different type.
-    |  crand 4*cr0+eq, 4*cr0+eq, 4*cr5+eq	// 0: Same type and same tv.
-    |   mr SAVE1, PC
-    |  cror 4*cr0+eq, 4*cr0+eq, 4*cr0+gt	// 0 or 2.
-    |  cror 4*cr0+lt, 4*cr0+lt, 4*cr0+gt	// 1 or 2.
-    if (vk) {
-      |  bne cr0, >6
-      |  add PC, PC, SAVE0
-      |6:
-    } else {
-      |  beq cr0, >6
-      |  add PC, PC, SAVE0
-      |6:
-    }
-    |.if DUALNUM
-    |  bge cr0, >2			// Done if 1 or 2.
-    |1:
-    |  ins_next
-    |2:
-    |.else
-    |  blt cr0, <1			// Done if 1 or 2.
-    |.endif
-    |  blt cr6, <1			// Done if not tab/ud.
-    |
-    |  // Different tables or userdatas. Need to check __eq metamethod.
+    |  beq >3				// Equal.
+    |  // Not bitwise equal.
+    |  cmpd ITYPE, TMP0
+    |  bne >2				// Different types: not equal.
+    |  cmpdi ITYPE, LJ_TTAB
+    |  beq >4
+    |  cmpdi ITYPE, LJ_TUDATA
+    |  bne >2				// Same type but not tab/ud: not equal.
+    |4:  // Same-type table/userdata, different objects: __eq metamethod.
     |  // Field metatable must be at same offset for GCtab and GCudata!
-    |   mr CARG3, CARG4
-    |  lwz TAB:TMP2, TAB:CARG2->metatable
-    |   li CARG4, 1-vk			// ne = 0 or 1.
-    |  cmplwi TAB:TMP2, 0
-    |  beq <1				// No metatable?
+    |  rldicl CARG2, CARG1, 0, 17		// o1 ptr.
+    |   rldicl CARG3, CARG3, 0, 17		// o2 ptr.
+    |  lp TAB:TMP2, TAB:CARG2->metatable
+    |   li CARG4, 1-vk			// ne = 0 (eq) or 1 (ne).
+    |  cmpdi TAB:TMP2, 0
+    |  beq >2				// No metatable: not equal.
     |  lbz TMP2, TAB:TMP2->nomm
     |  andix. TMP2, TMP2, 1<<MM_eq
-    |  bne <1				// Or 'no __eq' flag set?
-    |  mr PC, SAVE1			// Restore old PC.
-    |  b ->vmeta_equal			// Handle __eq metamethod.
+    |  bne >2				// 'no __eq' flag set: not equal.
+    |  b ->vmeta_equal			// CARG2,CARG3,CARG4 set; PC intact.
+    |3:  // Equal.
+    if (vk) {
+      |  add PC, PC, SAVE0
+    }
+    |1:
+    |  ins_next
+    |2:  // Not equal.
+    if (!vk) {
+      |  add PC, PC, SAVE0
+    }
+    |  b <1
     break;
 
   case BC_ISEQS: case BC_ISNES:
