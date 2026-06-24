@@ -4072,10 +4072,10 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   ld CARG4, 0(RC)
     ||  break;
     ||}
-    |  srdi TMP2, CARG2, 32
-    |  srdi TMP3, CARG4, 32
-    |  cmplw cr0, TMP2, TISNUMhi
-    |  cmplw cr1, TMP3, TISNUMhi
+    |  srdi TMP1, CARG2, 32
+    |  srdi TMP2, CARG4, 32		// (TMP3 overlaps CARG4 -- don't use it here.)
+    |  cmplw cr0, TMP1, TISNUMhi
+    |  cmplw cr1, TMP2, TISNUMhi
     |  bne cr0, >5
     |  bne cr1, >5
     |  extsw CARG2, CARG2			// src1 value.
