@@ -1055,18 +1055,12 @@ static void build_subroutines(BuildCtx *ctx)
   |  b >1
   |
   |->vmeta_tsetb:			// TMP0 = index
-  |.if not DUALNUM
-  |  tonum_u f0, TMP0
-  |.endif
   |   decode_RB8 RB, INS
   |  la CARG3, DISPATCH_GL(tmptv)(DISPATCH)
   |   add CARG2, BASE, RB
-  |.if DUALNUM
-  |  stw TISNUM, 0(CARG3)
-  |  stw TMP0, 4(CARG3)
-  |.else
-  |  stfd f0, 0(CARG3)
-  |.endif
+  |  clrldi TMP0, TMP0, 32
+  |  add TMP0, TMP0, TISNUM		// GC64: integer key TValue.
+  |  std TMP0, 0(CARG3)
   |  b >1
   |
   |->vmeta_tsetv:
@@ -4738,39 +4732,29 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_TSETB:
     |  // RA = src*8, RB = table*8, RC = index*8
-    |  lwzux CARG1, RB, BASE
+    |  add RB, RB, BASE
+    |  ld CARG1, 0(RB)
     |   srwi TMP0, RC, 3
-    |   lwz TAB:RB, 4(RB)
     |  checktab CARG1; bne ->vmeta_tsetb
+    |  mr TAB:RB, CARG1
     |  lwz TMP1, TAB:RB->asize
-    |   lwz TMP2, TAB:RB->array
+    |   lp TMP2, TAB:RB->array
     |    lbz TMP3, TAB:RB->marked
     |  cmplw TMP0, TMP1
-    |.if FPU
     |   lfdx f14, BASE, RA
-    |.else
-    |   add CARG2, BASE, RA
-    |   lwz SAVE0, 0(CARG2)
-    |   lwz SAVE1, 4(CARG2)
-    |.endif
     |  bge ->vmeta_tsetb
-    |  lwzx TMP1, TMP2, RC
-    |  checknil TMP1; beq >5
+    |  ldx TMP1, TMP2, RC
+    |  cmpd TMP1, TISNIL; beq >5
     |1:
     |  andix. TMP0, TMP3, LJ_GC_BLACK	// isblack(table)
-    |.if FPU
     |   stfdx f14, TMP2, RC
-    |.else
-    |   stwux SAVE0, RC, TMP2
-    |   stw SAVE1, 4(RC)
-    |.endif
     |  bne >7
     |2:
     |  ins_next
     |
     |5:  // Check for __newindex if previous value is nil.
-    |  lwz TAB:TMP1, TAB:RB->metatable
-    |  cmplwi TAB:TMP1, 0
+    |  lp TAB:TMP1, TAB:RB->metatable
+    |  cmpdi TAB:TMP1, 0
     |  beq <1				// No metatable: done.
     |  lbz TMP1, TAB:TMP1->nomm
     |  andix. TMP1, TMP1, 1<<MM_newindex
