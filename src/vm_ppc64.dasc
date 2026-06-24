@@ -5110,7 +5110,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |   add RA, BASE, RA
     |  addi RC, RC, FRAME_VARG
     |   add TMP2, RA, RB
-    |  subi TMP3, BASE, 8		// TMP3 = vtop
+    |  subi TMP3, BASE, 16		// TMP3 = vtop (GC64/FR2: 2-slot frame).
     |  sub RC, RC, TMP0			// RC = vbase
     |  // Note: RC may now be even _above_ BASE if nargs was < numparams.
     |  cmplwi cr1, RB, 0
@@ -5143,7 +5143,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    addi RA, RA, 8
     |   blt cr1, <1			// More vararg slots?
     |2:  // Fill up remainder with nil.
-    |  stw TISNIL, 0(RA)
+    |  std TISNIL, 0(RA)			// GC64: full 64-bit nil.
     |  cmplw RA, TMP2
     |   addi RA, RA, 8
     |  blt <2
@@ -5189,7 +5189,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lp BASE, L->base
     |  add RA, BASE, RA
     |  add RC, BASE, SAVE0
-    |  subi TMP3, BASE, 8
+    |  subi TMP3, BASE, 16		// GC64/FR2: vtop.
     |  b <6
     break;
 
