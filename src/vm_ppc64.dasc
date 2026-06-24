@@ -2197,19 +2197,23 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro math_minmax, name, ismax
   |.if DUALNUM
   |  .ffunc_1 name
-  |  checknum CARG3
+  |  srdi TMP0, CARG3, 32
   |   addi SAVE0, BASE, 8
   |   add SAVE1, BASE, NARGS8:RC
-  |  bne >4
-  |1:  // Handle integers.
-  |  lwz CARG4, 0(SAVE0)
+  |  cmplw TMP0, TISNUMhi
+  |  clrldi CARG1, CARG3, 32		// Running integer value.
+  |  bne >4				// arg1 not an integer.
+  |1:  // Handle integers. CARG1 = running result.
+  |  ld CARG4, 0(SAVE0)
   |   cmplw cr1, SAVE0, SAVE1
-  |  lwz CARG2, 4(SAVE0)
-  |   bge cr1, ->fff_resi
-  |  checknum CARG4
-  |   xoris TMP0, CARG1, 0x8000
-  |   xoris TMP3, CARG2, 0x8000
-  |  bne >3
+  |  srdi TMP1, CARG4, 32
+  |   bge cr1, ->fff_resi		// Done (CRET1 = CARG1).
+  |  cmplw TMP1, TISNUMhi
+  |   clrldi CARG2, CARG4, 32
+  |  bgt ->fff_fallback			// Not a number.
+  |  bne >3				// Not an integer: switch to FP.
+  |  xoris TMP0, CARG1, 0x8000
+  |  xoris TMP3, CARG2, 0x8000
   |  subfc TMP3, TMP3, TMP0
   |  subfe TMP0, TMP0, TMP0
   |.if ismax
@@ -2218,79 +2222,36 @@ static void build_subroutines(BuildCtx *ctx)
   |  and TMP3, TMP3, TMP0
   |.endif
   |  add CARG1, TMP3, CARG2
-  |.if GPR64
   |  rldicl CARG1, CARG1, 0, 32
-  |.endif
   |   addi SAVE0, SAVE0, 8
   |  b <1
-  |3:
-  |  bge ->fff_fallback
-  |  // Convert intermediate result to number and continue below.
-  |.if FPU
+  |3:  // Convert running integer to FP and continue with the FP arg.
   |  tonum_i FARG1, CARG1
   |  lfd FARG2, 0(SAVE0)
-  |.else
-  |  mr CARG2, CARG1
-  |  bl ->vm_sfi2d_1
-  |  lwz CARG3, 0(SAVE0)
-  |  lwz CARG4, 4(SAVE0)
-  |.endif
   |  b >6
-  |4:
-  |.if FPU
-  |   lfd FARG1, 0(BASE)
-  |.else
-  |   lwz CARG1, 0(BASE)
-  |   lwz CARG2, 4(BASE)
-  |.endif
-  |  bge ->fff_fallback
-  |5:  // Handle numbers.
-  |  lwz CARG3, 0(SAVE0)
+  |4:  // arg1 not an integer.
+  |  bgt ->fff_fallback			// Not a number.
+  |  lfd FARG1, 0(BASE)
+  |5:  // Handle numbers. FARG1 = running result.
+  |  ld CARG3, 0(SAVE0)
   |   cmplw cr1, SAVE0, SAVE1
-  |.if FPU
   |  lfd FARG2, 0(SAVE0)
-  |.else
-  |  lwz CARG4, 4(SAVE0)
-  |.endif
-  |   bge cr1, ->fff_resn
-  |  checknum CARG3; bge >7
+  |   bge cr1, ->fff_resn		// Done.
+  |  srdi TMP0, CARG3, 32
+  |  cmplw TMP0, TISNUMhi
+  |  bgt ->fff_fallback			// Not a number.
+  |  beq >7				// Integer arg: convert.
   |6:
   |   addi SAVE0, SAVE0, 8
-  |.if FPU
   |.if ismax
   |  fsub f0, FARG1, FARG2
   |.else
   |  fsub f0, FARG2, FARG1
   |.endif
   |  fsel FARG1, f0, FARG1, FARG2
-  |.else
-  |  stw CARG1, SFSAVE_1
-  |  stw CARG2, SFSAVE_2
-  |  stw CARG3, SFSAVE_3
-  |  stw CARG4, SFSAVE_4
-  |  blex __ledf2
-  |  cmpwi CRET1, 0
-  |.if ismax
-  |  blt >8
-  |.else
-  |  bge >8
-  |.endif
-  |  lwz CARG1, SFSAVE_1
-  |  lwz CARG2, SFSAVE_2
   |  b <5
-  |8:
-  |  lwz CARG1, SFSAVE_3
-  |  lwz CARG2, SFSAVE_4
-  |.endif
-  |  b <5
-  |7:  // Convert integer to number and continue above.
-  |   lwz CARG3, 4(SAVE0)
-  |  bne ->fff_fallback
-  |.if FPU
+  |7:  // Convert integer arg to FP and continue.
   |  tonum_i FARG2, CARG3
-  |.else
-  |  bl ->vm_sfi2d_2
-  |.endif
   |  b <6
   |.else
   |  .ffunc_n name
