@@ -1755,10 +1755,14 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro coroutine_resume_wrap, resume
   |.if resume
   |.ffunc_1 coroutine_resume
-  |  cmpwi CARG3, LJ_TTHREAD; bne ->fff_fallback
+  |  sradi TMP0, CARG3, 47
+  |  cmpdi TMP0, LJ_TTHREAD
+  |  rldicl L:CARG1, CARG3, 0, 17		// GC64: thread ptr.
+  |  bne ->fff_fallback
   |.else
   |.ffunc coroutine_wrap_aux
-  |  lwz L:CARG1, CFUNC:RB->upvalue[0].gcr
+  |  lp L:CARG1, CFUNC:RB->upvalue[0].gcr
+  |  rldicl L:CARG1, L:CARG1, 0, 17		// GC64: mask thread ptr.
   |.endif
   |  lbz TMP0, L:CARG1->status
   |   lp TMP1, L:CARG1->cframe
@@ -1784,6 +1788,12 @@ static void build_subroutines(BuildCtx *ctx)
   |  subi NARGS8:RC, NARGS8:RC, 8
   |  subi TMP2, TMP2, 8
   |.endif
+  |  // GC64/FR2: a fresh coroutine (status < LUA_YIELD) starts past the func slot.
+  |  // (Note: isel rA=r0 means literal 0, so avoid TMP0=r0 as a source.)
+  |  addi TMP3, CARG2, 8
+  |  addi TMP1, TMP2, 8
+  |  isel CARG2, TMP3, CARG2, 4*cr0+lt
+  |  isel TMP2, TMP1, TMP2, 4*cr0+lt
   |  stp TMP2, L:CARG1->top
   |  li TMP1, 0
   |  stp BASE, L->top
@@ -1851,8 +1861,11 @@ static void build_subroutines(BuildCtx *ctx)
   |  andix. TMP0, PC, FRAME_TYPE
   |.if resume
   |  li TMP1, LJ_TTRUE
+  |  not TMP1, TMP1
+  |  sldi TMP1, TMP1, 47
+  |  not TMP1, TMP1			// GC64: canonical true.
   |   la RA, -8(BASE)
-  |  stw TMP1, -8(BASE)			// Prepend true to results.
+  |  std TMP1, -8(BASE)			// Prepend true to results.
   |  addi RD, RD, 16
   |.else
   |  mr RA, BASE
@@ -1869,6 +1882,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  andix. TMP0, PC, FRAME_TYPE
   |  la TMP3, -8(TMP3)
   |   li TMP1, LJ_TFALSE
+  |   not TMP1, TMP1
+  |   sldi TMP1, TMP1, 47
+  |   not TMP1, TMP1			// GC64: canonical false.
   |.if FPU
   |  lfd f0, 0(TMP3)
   |.else
@@ -1877,7 +1893,7 @@ static void build_subroutines(BuildCtx *ctx)
   |.endif
   |   stp TMP3, L:SAVE0->top		// Remove error from coroutine stack.
   |    li RD, (2+1)*8
-  |   stw TMP1, -8(BASE)		// Prepend false to results.
+  |   std TMP1, -8(BASE)		// Prepend false to results.
   |    la RA, -8(BASE)
   |.if FPU
   |  stfd f0, 0(BASE)			// Copy error message.
