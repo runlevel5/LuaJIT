@@ -884,9 +884,9 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |->cont_dispatch:
   |  // BASE = meta base, RA = resultptr, RD = (nresults+1)*8
-  |  lwz TMP0, -12(BASE)		// Continuation.
-  |   mr RB, BASE
-  |   mr BASE, TMP2			// Restore caller BASE.
+  |  lwz TMP0, -12(BASE)		// Continuation. (NYI GC64: FR1 -- whole
+  |   mr RB, BASE			// metamethod-continuation frame is still FR1;
+  |   mr BASE, TMP2			// fn metamethods (__index/__add fns) need it.)
   |    lp LFUNC:TMP1, FRAME_FUNC(TMP2)
   |    rldicl TMP1, TMP1, 0, 17
   |.if FFI
@@ -894,7 +894,7 @@ static void build_subroutines(BuildCtx *ctx)
   |.endif
   |     lwz PC, -16(RB)			// Restore PC from [cont|PC].
   |   subi TMP2, RD, 8
-  |   stwx TISNIL, RA, TMP2		// Ensure one valid arg.
+  |   stdx TISNIL, RA, TMP2		// GC64: full 64-bit nil. Ensure one valid arg.
   |.if FFI
   |  ble >1
   |.endif
@@ -1019,7 +1019,7 @@ static void build_subroutines(BuildCtx *ctx)
   |->vmeta_tgetr:
   |  bl extern lj_tab_getinth		// (GCtab *t, int32_t key)
   |  // Returns cTValue * or NULL.
-  |  cmplwi CRET1, 0
+  |  cmpdi CRET1, 0
   |  beq >1
   |.if FPU
   |  lfd f14, 0(CRET1)
@@ -1029,7 +1029,7 @@ static void build_subroutines(BuildCtx *ctx)
   |.endif
   |  b ->BC_TGETR_Z
   |1:
-  |  stwx TISNIL, BASE, RA
+  |  stdx TISNIL, BASE, RA		// GC64: full 64-bit nil.
   |  b ->cont_nop
   |
   |//-----------------------------------------------------------------------
@@ -4186,10 +4186,10 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_KNIL:
     |  // RA = base*8, RD = end*8
-    |  stwx TISNIL, BASE, RA
+    |  stdx TISNIL, BASE, RA		// GC64: full 64-bit nil.
     |   addi RA, RA, 8
     |1:
-    |  stwx TISNIL, BASE, RA
+    |  stdx TISNIL, BASE, RA
     |  cmpw RA, RD
     |   addi RA, RA, 8
     |  blt <1
