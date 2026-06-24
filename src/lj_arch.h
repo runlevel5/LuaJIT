@@ -558,7 +558,7 @@
 #undef LJ_TARGET_ARM64
 #endif
 #elif LJ_TARGET_PPC
-#if defined(_LITTLE_ENDIAN) && (!defined(_BYTE_ORDER) || (_BYTE_ORDER == _LITTLE_ENDIAN))
+#if LJ_ARCH_BITS == 32 && defined(_LITTLE_ENDIAN) && (!defined(_BYTE_ORDER) || (_BYTE_ORDER == _LITTLE_ENDIAN))
 #error "No support for little-endian PPC32"
 #undef LJ_TARGET_PPC
 #endif

@@ -28,6 +28,7 @@
 |//         Must avoid (slow) micro-coded instructions.
 |
 |.if P64
+|.define GPR64, 1	// PPC64 ELFv2 (ppc64le): 64 bit GPRs and pointers.
 |.define TOC, 1
 |.define TOCENV, 1
 |.macro lpx, a, b, c; ldx a, b, c; .endmacro
@@ -47,8 +48,9 @@
 |
 |// Convenience macros for TOC handling.
 |.if TOC
-|// Linker needs a TOC patch area for every external call relocation.
-|.macro blex, target; bl extern target@plt; nop; .endmacro
+|// ELFv2: plain bl + nop. The linker patches the nop to `ld r2, SAVE_TOC`
+|// (TOC restore) for cross-module calls and inserts a PLT stub as needed.
+|.macro blex, target; bl extern target; nop; .endmacro
 |.macro .toc, a, b; a, b; .endmacro
 |.if P64
 |.define TOC_OFS,	 8
@@ -640,7 +642,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  lwz L, SAVE_L
   |  .toc ld TOCREG, SAVE_TOC
   |   li TMP0, ~LJ_VMST_C
-  |  lwz GL:TMP1, L->glref
+  |  lp GL:TMP1, L->glref
   |   stw TMP0, GL:TMP1->vmstate
   |  b ->vm_leave_unw
   |
@@ -657,7 +659,7 @@ static void build_subroutines(BuildCtx *ctx)
   |     li TISNUM, LJ_TISNUM		// Setup type comparison constants.
   |  lp BASE, L->base
   |     .FPU lus TMP3, 0x59c0		// TOBIT = 2^52 + 2^51 (float).
-  |   lwz DISPATCH, L->glref		// Setup pointer to dispatch table.
+  |   lp DISPATCH, L->glref		// Setup pointer to dispatch table.
   |     li ZERO, 0
   |     .FPU stw TMP3, TMPD
   |  li TMP1, LJ_TFALSE
@@ -711,7 +713,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  // (lua_State *L, TValue *base, int nres1 = 0, ptrdiff_t ef = 0)
   |  saveregs
   |  mr L, CARG1
-  |    lwz DISPATCH, L->glref		// Setup pointer to dispatch table.
+  |    lp DISPATCH, L->glref		// Setup pointer to dispatch table.
   |  mr BASE, CARG2
   |    lbz TMP1, L->status
   |   stw L, SAVE_L
@@ -727,7 +729,7 @@ static void build_subroutines(BuildCtx *ctx)
   |    beq >3
   |
   |  // Resume after yield (like a return).
-  |  stw L, DISPATCH_GL(cur_L)(DISPATCH)
+  |  stp L, DISPATCH_GL(cur_L)(DISPATCH)
   |  mr RA, BASE
   |   lp BASE, L->base
   |     li TISNUM, LJ_TISNUM		// Setup type comparison constants.
@@ -769,7 +771,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  lp TMP1, L:CARG1->cframe
   |    mr L, CARG1
   |   stw CARG3, SAVE_NRES
-  |    lwz DISPATCH, L->glref		// Setup pointer to dispatch table.
+  |    lp DISPATCH, L->glref		// Setup pointer to dispatch table.
   |   stw CARG1, SAVE_L
   |     mr BASE, CARG2
   |    addi DISPATCH, DISPATCH, GG_G2DISP
@@ -778,7 +780,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  stp sp, L->cframe			// Add our C frame to cframe chain.
   |
   |3:  // Entry point for vm_cpcall/vm_resume (BASE = base, PC = ftype).
-  |  stw L, DISPATCH_GL(cur_L)(DISPATCH)
+  |  stp L, DISPATCH_GL(cur_L)(DISPATCH)
   |  lp TMP2, L->base			// TMP2 = old base (used in vmeta_call).
   |     li TISNUM, LJ_TISNUM		// Setup type comparison constants.
   |   lp TMP1, L->top
@@ -815,18 +817,22 @@ static void build_subroutines(BuildCtx *ctx)
   |   lwz TMP0, L:CARG1->stack
   |  stw CARG1, SAVE_L
   |   lp TMP1, L->top
-  |     lwz DISPATCH, L->glref		// Setup pointer to dispatch table.
+  |     lp DISPATCH, L->glref		// Setup pointer to dispatch table.
   |  stw CARG1, SAVE_PC			// Any value outside of bytecode is ok.
   |   sub TMP0, TMP0, TMP1		// Compute -savestack(L, L->top).
   |    lp TMP1, L->cframe
   |     addi DISPATCH, DISPATCH, GG_G2DISP
+  |.if P64
+  |  mr r12, CARG4		// ELFv2: r12 = entry for callee global entry.
+  |.else
   |  .toc lp CARG4, 0(CARG4)
+  |.endif
   |  li TMP2, 0
   |   stw TMP0, SAVE_NRES		// Neg. delta means cframe w/o frame.
   |  stw TMP2, SAVE_ERRF		// No error function.
   |    stp TMP1, SAVE_CFRAME
   |    stp sp, L->cframe		// Add our C frame to cframe chain.
-  |     stw L, DISPATCH_GL(cur_L)(DISPATCH)
+  |     stp L, DISPATCH_GL(cur_L)(DISPATCH)
   |  mtctr CARG4
   |  bctrl			// (lua_State *L, lua_CFunction func, void *ud)
   |.if PPE
@@ -1854,7 +1860,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  lp TMP3, L:SAVE0->top
   |    li_vmstate INTERP
   |  lp BASE, L->base
-  |    stw L, DISPATCH_GL(cur_L)(DISPATCH)
+  |    stp L, DISPATCH_GL(cur_L)(DISPATCH)
   |    st_vmstate
   |   bgt >8
   |  sub RD, TMP3, TMP2
@@ -2711,7 +2717,11 @@ static void build_subroutines(BuildCtx *ctx)
   |    addi TMP0, TMP1, 8*LUA_MINSTACK
   |     lwz TMP2, L->maxstack
   |   stw PC, SAVE_PC			// Redundant (but a defined value).
+  |.if P64
+  |  mr r12, TMP3		// ELFv2: r12 = entry.
+  |.else
   |  .toc lp TMP3, 0(TMP3)
+  |.endif
   |  cmplw TMP0, TMP2
   |     stp BASE, L->base
   |    stp TMP1, L->top
@@ -6027,24 +6037,35 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     }
     |   add TMP1, RA, NARGS8:RC
     |   lwz TMP2, L->maxstack
+    |.if P64
+    |  mr r12, RD		// ELFv2: r12 = entry.
+    |.else
     |  .toc lp TMP3, 0(RD)
+    |.endif
     |    add RC, BASE, NARGS8:RC
     |   stp BASE, L->base
     |   cmplw TMP1, TMP2
     |    stp RC, L->top
     |     li_vmstate C
+    |.if P64
+    |  mtctr RD
+    |.else
     |.if TOC
     |  mtctr TMP3
     |.else
     |  mtctr RD
+    |.endif
     |.endif
     if (op == BC_FUNCCW) {
       |  lp CARG2, CFUNC:RB->f
     }
     |  mr CARG1, L
     |   bgt ->vm_growstack_c		// Need to grow stack.
+    |.if P64
+    |.else
     |  .toc lp TOCREG, TOC_OFS(RD)
     |  .tocenv lp ENVREG, ENV_OFS(RD)
+    |.endif
     |     st_vmstate
     |  bctrl				// (lua_State *L [, lua_CFunction f])
     |  // Returns nresults.
@@ -6054,7 +6075,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lp TMP1, L->top
     |    li_vmstate INTERP
     |  lwz PC, FRAME_PC(BASE)		// Fetch PC of caller.
-    |    stw L, DISPATCH_GL(cur_L)(DISPATCH)
+    |    stp L, DISPATCH_GL(cur_L)(DISPATCH)
     |   sub RA, TMP1, RD		// RA = L->top - nresults*8
     |    st_vmstate
     |  b ->vm_returnc
