@@ -3852,52 +3852,32 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
   case BC_UNM:
     |  // RA = dst*8, RD = src*8
-    |  lwzux TMP1, RD, BASE
-    |   lwz TMP0, 4(RD)
-    |  checknum TMP1
-    |.if DUALNUM
-    |  bne >5
-    |.if GPR64
-    |  lus TMP2, 0x8000
-    |  neg. TMP0, TMP0
-    |  beq >8
-    |  cmplw TMP0, TMP2
-    |  beq >4
-    |.else
-    |  nego. TMP0, TMP0
-    |  beq >8
-    |  bso >4
-    |1:
-    |.endif
-    |  ins_next1
-    |  stwux TISNUM, RA, BASE
-    |   stw TMP0, 4(RA)
+    |  add RD, RD, BASE
+    |  ld CARG1, 0(RD)			// src TValue.
+    |  srdi TMP1, CARG1, 32
+    |  cmplw cr0, TMP1, TISNUMhi
+    |  bgt ->vmeta_unm			// Not a number.
+    |  bne >5				// Not an integer -> FP.
+    |  extsw TMP0, CARG1
+    |  neg TMP0, TMP0			// -x (64-bit).
+    |  extsw TMP1, TMP0
+    |  cmpd TMP1, TMP0			// Overflow (x == INT_MIN)?
+    |  bne >4
+    |  clrldi TMP0, TMP0, 32
+    |  add CARG1, TMP0, TISNUM		// Tag integer result.
     |3:
-    |  ins_next2
-    |4:
-    |.if not GPR64
-    |  // Potential overflow.
-    |  checkov TMP1, <1			// Ignore unrelated overflow.
-    |.endif
-    |  lus TMP1, 0x41e0			// 2^31.
-    |  li TMP0, 0
-    |  b >7
-    |.endif
-    |5:
-    |  bge ->vmeta_unm
-    |  xoris TMP1, TMP1, 0x8000
-    |7:
     |  ins_next1
-    |  stwux TMP1, RA, BASE
-    |   stw TMP0, 4(RA)
-    |.if DUALNUM
-    |  b <3
-    |8:
-    |  lus TMP1, 0x8000			// -0.
-    |  b <7
-    |.else
+    |  stdux CARG1, RA, BASE
     |  ins_next2
-    |.endif
+    |4:  // Overflow: -(2^31) -> 2^31 as a double.
+    |  lus TMP0, 0x41e0
+    |  sldi CARG1, TMP0, 32
+    |  b <3
+    |5:  // FP: flip the sign bit.
+    |  li TMP0, 1
+    |  sldi TMP0, TMP0, 63
+    |  xor CARG1, CARG1, TMP0
+    |  b <3
     break;
   case BC_LEN:
     |  // RA = dst*8, RD = src*8
