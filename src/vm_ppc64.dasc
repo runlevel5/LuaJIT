@@ -5276,7 +5276,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |6:  // Fill up results with nil.
     |  subi TMP1, RD, 8
     |   addi RD, RD, 8
-    |  stwx TISNIL, TMP2, TMP1
+    |  stdx TISNIL, TMP2, TMP1		// GC64: full 64-bit nil.
     |  b <5
     |
     |->BC_RETV_Z:  // Non-standard return case.
@@ -5326,7 +5326,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |6:  // Fill up results with nil.
     |  subi TMP1, RD, 8
     |   addi RD, RD, 8
-    |  stwx TISNIL, TMP2, TMP1
+    |  stdx TISNIL, TMP2, TMP1		// GC64: full 64-bit nil.
     |  b <5
     break;
 
