@@ -4464,11 +4464,10 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 
   case BC_FNEW:
     |  // RA = dst*8, RD = proto_const*8 (~) (holding function prototype)
-    |  srwi TMP1, RD, 1
+    |  subfic TMP1, RD, -8
     |   stp BASE, L->base
-    |  subfic TMP1, TMP1, -4
     |   stp PC, SAVE_PC
-    |  lwzx CARG2, KBASE, TMP1		// KBASE-4-tab_const*4
+    |  ldx CARG2, KBASE, TMP1		// GC64: proto (raw GCRef ptr).
     |   mr CARG1, L
     |  lp CARG3, FRAME_FUNC(BASE)
     |  rldicl CARG3, CARG3, 0, 17
@@ -4476,9 +4475,10 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  bl extern lj_func_newL_gc
     |  // Returns GCfuncL *.
     |  lp BASE, L->base
-    |   li TMP0, LJ_TFUNC
-    |  stwux TMP0, RA, BASE
-    |  stw LFUNC:CRET1, 4(RA)
+    |   li ITYPE, LJ_TFUNC
+    |   sldi ITYPE, ITYPE, 47
+    |  or LFUNC:CRET1, LFUNC:CRET1, ITYPE	// GC64: tag the function.
+    |  stdux LFUNC:CRET1, RA, BASE
     |  ins_next
     break;
 
