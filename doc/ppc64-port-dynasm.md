@@ -43,9 +43,13 @@ operators and the `decode_OP8`/`decode_OPP` macros for P64 already exist.
 assembler + linker resolve these**, inserting ELFv2 PLT call stubs and r2/TOC handling
 as needed. Consequences:
 
-- **Function descriptors (`.opd`) are PS3-only** (`TOCPREFIX "."`, gated on
-  `LJ_TARGET_PS3`, `buildvm_asm.c:138-142`/`176-194`). ELFv2 has **no descriptors** —
-  the non-PS3 path (`TOCPREFIX ""`, `bl sym`) is already correct. No change.
+- **Function descriptors:** ELFv2 (ppc64le) has **none** — the non-PS3 path
+  (`TOCPREFIX ""`, `bl sym`) is already correct, no change. **Big-endian ppc64 uses
+  ELFv1**, which *does* use `.opd` descriptors + per-call TOC — that is exactly the
+  existing PS3-style machinery (`TOCPREFIX "."`, `buildvm_asm.c:138-142`/`176-194`,
+  and the `.toc`/descriptor-deref in `vm_ppc.dasc`). So BE/ELFv1 **reuses** it; the
+  buildvm `.opd` emission just needs its guard broadened from `LJ_TARGET_PS3` to
+  also cover big-endian ELFv1 ppc64.
 - **`@ha`/`@l`/`.TOC.` data relocations are NOT needed.** The interpreter reaches
   `global_State` through the `DISPATCH`/`JGL` register (passed in), not TOC-relative
   data. So the missing TOC-reloc support in `dasm_ppc.lua` is irrelevant here.

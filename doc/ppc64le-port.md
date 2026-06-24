@@ -1,4 +1,4 @@
-# PPC64 (ELFv2) JIT backend for LuaJIT — implementation plan
+# PPC64 (ELFv2 LE / ELFv1 BE) JIT backend for LuaJIT — implementation plan
 
 Status: planning. Target branch: `v2.1`.
 
@@ -9,16 +9,31 @@ Add a 64-bit POWER JIT backend to LuaJIT.
 - **ISA:** baseline **2.07 (POWER8)**, with **3.0 (POWER9)** and **3.1 (POWER10)**
   fast paths selected at **build time** via `LJ_ARCH_VERSION` (from `-mcpu`).
   No runtime CPU dispatch (matches every existing LuaJIT arch).
-- **ABIs in scope (all ELFv2):**
-  1. Linux `ppc64le` (little-endian) — primary.
-  2. Big-endian `ppc64` ELFv2 (LE/BE parameterized, not hardcoded).
-  3. FreeBSD `ppc64le`.
-- **Out of scope:** ELFv1 (legacy big-endian function-descriptor ABI), AIX,
-  32-bit ppc, PS3/Xbox360 32-on-64 (these stay on the existing legacy path).
+- **ABIs in scope — endianness picks the ABI:**
+  1. Linux `ppc64le` (little-endian) → **ELFv2** — primary, implemented first.
+  2. Big-endian `ppc64` → **ELFv1** (the traditional descriptor/TOC ABI) — planned.
+  3. FreeBSD `ppc64le` → ELFv2.
+- **Out of scope:** AIX, 32-bit ppc, PS3/Xbox360 32-on-64 (these stay on the
+  existing legacy path); ppc64le with ELFv1; ppc64-BE with ELFv2.
 
-Because two endiannesses are in scope, the backend must be **endian-parameterized**
-throughout (`LJ_BE`/`ENDIAN_BE`), not LE-hardcoded. ELFv2 is the unifying constant
-(`_CALL_ELF == 2` on both LE and BE), so detection gates on ELFv2, not endianness.
+This matches the platform convention: **little-endian ppc64 = ELFv2, big-endian
+ppc64 = ELFv1**. Detection keys on endianness, then requires the matching ABI
+(`_CALL_ELF == 2` for LE). The backend must be **endian-parameterized**
+(`LJ_BE`/`ENDIAN_BE`) *and* ABI-parameterized.
+
+**ABI implications (LE vs BE):**
+- **ELFv2 (LE):** no function descriptors — a function pointer is its entry; the
+  callee derives r2 (TOC) from r12; external calls are `bl sym; nop` (linker
+  patches the nop for TOC restore). This is what the ppc64le code does today.
+- **ELFv1 (BE):** function pointers are descriptors `{entry, toc, env}` in `.opd`;
+  calls deref the descriptor and load the callee's TOC. This is exactly the
+  **legacy `.toc`/descriptor machinery already in `vm_ppc.dasc`/`buildvm_asm.c`**
+  (the PS3 path), so BE largely *reuses* it rather than needing new code.
+- Consequence for the dasc: the ELFv2-specific call sites are currently gated on
+  `.if P64`. Since BE is also `P64` but wants ELFv1, those gates must become an
+  **ELFv2-specific** condition (e.g. a DynASM `ELFV2` define derived from
+  `ENDIAN_LE`) before BE is enabled — the `.else` (legacy descriptor) branch is
+  the BE/ELFv1 path.
 
 ## Why prior ports were judged poor — and the reframing
 
@@ -62,7 +77,7 @@ LuaJIT's modern GC64 + dual-number 64-bit reference. So:
 
 - Number mode: `LJ_NUMMODE_DUAL` (match arm64), hardware FPU assumed.
 - ISA selection: build-time only.
-- ABIs: Linux ELFv2 LE, BE ppc64 ELFv2, FreeBSD ppc64le.
+- ABIs: Linux ppc64le (ELFv2), big-endian ppc64 (ELFv1), FreeBSD ppc64le (ELFv2).
 - Endianness: parameterized (both LE and BE), ELFv2-only.
 
 ## Components / workstreams
@@ -73,7 +88,7 @@ LuaJIT's modern GC64 + dual-number 64-bit reference. So:
   far calls via `ctr`/trampolines), `LJ_ARCH_VERSION` for 2.07/3.0/3.1
   (`_ARCH_PWR8/9/10`), and gate on `_CALL_ELF == 2`.
 - `src/Makefile` + host: add `CCOPT_ppc`/`-mcpu`, ELFv2 path, FreeBSD glue.
-- CI: QEMU **ppc64le** + QEMU **ppc64 (BE, ELFv2)** + FreeBSD ppc64le; POWER9/POWER10
+- CI: QEMU **ppc64le (ELFv2)** + QEMU **ppc64 (BE, ELFv1)** + FreeBSD ppc64le; POWER9/POWER10
   boxes for perf and final sign-off.
 
 ### B. Interpreter — `vm_ppc.dasc` (long pole of Phase 1)
@@ -207,7 +222,7 @@ existing `ppc` files + `dasm_ppc.lua` are the POWER-instruction source.
   edits + a `vm_ppc.dasc` that assembles (all interp paths may be `NYI`/`trap`).
   Goal: the tree *links* a `luajit` binary for ppc64le and ppc64. *Verify:* binary
   builds and prints version; running anything may trap — that's fine.
-- **0.5 CI** — QEMU `ppc64le`, QEMU `ppc64` (BE, ELFv2), FreeBSD ppc64le runners;
+- **0.5 CI** — QEMU `ppc64le` (ELFv2), QEMU `ppc64` (BE, ELFv1), FreeBSD ppc64le runners;
   smoke job = build + `luajit -v`.
 
 ## Phase 1 — Interpreter (`vm_ppc.dasc`, fresh, modeled on `vm_arm64.dasc`)

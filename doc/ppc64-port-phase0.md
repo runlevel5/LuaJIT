@@ -10,11 +10,17 @@ The `#error "No support for PPC64"` is replaced with a gated ELFv2 branch:
 
 ```c
 #elif LJ_ARCH_BITS == 64
+/* Endianness picks the ABI: little-endian = ELFv2, big-endian = ELFv1. */
+#if LJ_ARCH_ENDIAN == LUAJIT_LE
 #if defined(_CALL_ELF) && _CALL_ELF == 2
-/* PPC64 ELFv2 ABI (ppc64le, or ppc64 big-endian with ELFv2). GC64-only port. */
-#define LJ_TARGET_GC64		1
+#define LJ_TARGET_GC64		1	/* ppc64le, ELFv2. */
 #else
-#error "Only the PPC64 ELFv2 ABI is supported (ppc64le or ppc64 ELFv2)"
+#error "ppc64le requires the ELFv2 ABI"
+#undef LJ_TARGET_PPC
+#endif
+#else
+/* Big-endian ppc64 (ELFv1) is not implemented yet -- build ppc64le for now. */
+#error "PPC64 big-endian (ELFv1) is not implemented yet -- build ppc64le for now"
 #undef LJ_TARGET_PPC
 #endif
 #endif
@@ -22,13 +28,12 @@ The `#error "No support for PPC64"` is replaced with a gated ELFv2 branch:
 
 Why this is safe / sufficient:
 - **Gated.** Only fires for 64-bit PPC. x86/arm/arm64/mips and 32-bit PPC and
-  PS3 (`LJ_TARGET_CONSOLE`, hit first) are untouched. Legacy big-endian ELFv1 ppc64
-  still gets a clean `#error` (out of scope).
+  PS3 (`LJ_TARGET_CONSOLE`, hit first) are untouched.
 - **Drives GC64/FR2 automatically.** `LJ_TARGET_GC64 1` flows into the existing
   plumbing at `lj_arch.h:597` → `LJ_GC64 1` → `LJ_FR2 1`. No other macro edits needed.
-- `_CALL_ELF == 2` is defined by GCC/Clang for both ppc64le and ppc64-ELFv2, so one
-  branch covers both endiannesses (endianness comes from `LJ_ARCH_ENDIAN`, already set
-  at `lj_arch.h:315-321`).
+- **ABI split:** little-endian ppc64 uses ELFv2 (implemented), big-endian uses ELFv1
+  (planned; currently a clean `#error`). When BE lands, the BE branch sets
+  `LJ_TARGET_GC64` too and selects the legacy descriptor/TOC paths in the dasc.
 
 Verify (with a cross-compiler):
 ```sh
@@ -59,8 +64,8 @@ Optional/recommended:
 
 Three runners, build + `luajit -v`:
 - `qemu-ppc64le` (Linux, primary) — `powerpc64le-linux-gnu-` cross toolchain.
-- `qemu-ppc64` (Linux, big-endian ELFv2) — `powerpc64-linux-gnu-` (ensure ELFv2; modern
-  toolchains default to it on LE, verify `-mabi=elfv2` for BE).
+- `qemu-ppc64` (Linux, big-endian **ELFv1**) — `powerpc64-linux-gnu-` (BE ppc64 uses
+  the traditional ELFv1 descriptor/TOC ABI).
 - FreeBSD ppc64le (Phase 5; can be a non-blocking lane initially).
 
 ## 0.4 — Minimal stub set to LINK a binary
