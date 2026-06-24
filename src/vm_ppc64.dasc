@@ -1454,23 +1454,19 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.ffunc type
   |  cmplwi NARGS8:RC, 8
-  |   lwz CARG1, 0(BASE)
+  |   ld CARG1, 0(BASE)			// GC64: arg TValue.
   |  blt ->fff_fallback
-  |  .gpr64 extsw CARG1, CARG1
-  |  subfc TMP0, TISNUM, CARG1
-  |  subfe TMP2, CARG1, CARG1
-  |  orc TMP1, TMP2, TMP0
-  |  addi TMP1, TMP1, ~LJ_TISNUM+1
+  |  srdi TMP0, CARG1, 32
+  |  sradi ITYPE, CARG1, 47		// itype.
+  |  cmplw TMP0, TISNUMhi		// le = number.
+  |  li TMP1, ~LJ_TISNUM			// "number" upvalue index.
+  |  ble >1
+  |  not TMP1, ITYPE			// Otherwise ~itype.
+  |1:
   |  slwi TMP1, TMP1, 3
-  |.if FPU
-  |   la TMP2, CFUNC:RB->upvalue
-  |  lfdx FARG1, TMP2, TMP1
-  |.else
-  |  add TMP1, CFUNC:RB, TMP1
-  |  lwz CARG1, CFUNC:TMP1->upvalue[0].u32.hi
-  |  lwz CARG2, CFUNC:TMP1->upvalue[0].u32.lo
-  |.endif
-  |  b ->fff_resn
+  |  la TMP2, CFUNC:RB->upvalue
+  |  ldx CARG3, TMP2, TMP1		// Tagged type-name string TValue.
+  |  b ->fff_restv
   |
   |//-- Base library: getters and setters ---------------------------------
   |
