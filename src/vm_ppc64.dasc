@@ -199,6 +199,35 @@
 |.define TONUM_D,	TONUM_HI
 |
 |.else
+|.if OPD
+|
+|// GC64/ELFv1: called C functions DO write the caller's parameter save area
+|// (48..111), so the LuaJIT C frame info must live above it and above the reg
+|// saves -- otherwise SAVE_CFRAME/SAVE_L etc. get clobbered across C calls.
+|.define SAVE_CFRAME,	400(sp) // 64 bit C frame chain.
+|.define SAVE_PC,	408(sp) // 64 bit PC / sentinel.
+|.define SAVE_L,	416(sp) // 64 bit lua_State *.
+|.define SAVE_NRES,	424(sp) // 32 bit C frame info.
+|.define SAVE_ERRF,	428(sp)
+|.define SAVE_MULTRES,	432(sp)
+|.define TMPD_HI,	440(sp) // GC64/BE: high word at the lower address.
+|.define TMPD_LO,	444(sp)
+|.define TONUM_HI,	448(sp) // GC64/BE: high word at the lower address.
+|.define TONUM_LO,	452(sp)
+|.define CFRAME_SPACE,	464     // Delta for sp.
+|.define SAVE_LR,	480(sp)
+|.define SAVE_FPR_,	256     // .. 256+18*8: 64 bit FPR saves.
+|.define SAVE_GPR_,	112     // .. 112+18*8: 64 bit GPR saves.
+|//			48(sp)  // Callee parameter save area (ABI mandated).
+|.define SAVE_TOC,	40(sp)  // TOC save area.
+|.define SAVE_CR,	8(sp)   // 64 bit CR save.
+|// Back chain for sp:	0(sp)	<-- sp while in interpreter
+|
+|.define TMPD_BLO,	447(sp)		// GC64/BE: low byte at the higher address.
+|.define TMPD,		TMPD_HI
+|.define TONUM_D,	TONUM_HI
+|
+|.else
 |
 |// GC64: keep the C frame info inside our own frame. Placing it in the C
 |// caller's parameter save area (above CFRAME_SPACE) overflows that area and
@@ -228,6 +257,7 @@
 |.define TMPD,		TMPD_LO
 |.define TONUM_D,	TONUM_LO
 |
+|.endif
 |.endif
 |.else
 |
