@@ -910,7 +910,7 @@ static void build_subroutines(BuildCtx *ctx)
   |1:
   |  beq ->cont_ffi_callback		// cont = 1: return from FFI callback.
   |  // cont = 0: tailcall from C function.
-  |  subi TMP1, RB, 16
+  |  subi TMP1, RB, 32			// GC64/FR2: back up over the 4-slot cont frame.
   |  sub RC, TMP1, BASE
   |  b ->vm_call_tail
   |.endif
