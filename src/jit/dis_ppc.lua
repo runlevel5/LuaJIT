@@ -421,14 +421,15 @@ end
 local function disass_ins(ctx)
   local pos = ctx.pos
   local b0, b1, b2, b3 = byte(ctx.code, pos+1, pos+4)
-  local op = bor(lshift(b0, 24), lshift(b1, 16), lshift(b2, 8), b3)
+  local op = ctx.le and bor(lshift(b3, 24), lshift(b2, 16), lshift(b1, 8), b0)
+		     or bor(lshift(b0, 24), lshift(b1, 16), lshift(b2, 8), b3)
   local operands = {}
   local last = nil
   local rs = 21
   ctx.op = op
   ctx.rel = nil
 
-  local opat = map_pri[rshift(b0, 2)]
+  local opat = map_pri[rshift(op, 26)]
   while type(opat) ~= "string" do
     if not opat then return unknown(ctx) end
     opat = opat[band(rshift(op, opat.shift), opat.mask)]
@@ -576,6 +577,18 @@ local function disass(code, addr, out)
   create(code, addr, out):disass()
 end
 
+-- Extended API: little-endian variant (ppc64le). Instructions are stored
+-- little-endian, so swap the instruction word byte order.
+local function create_el(code, addr, out)
+  local ctx = create(code, addr, out)
+  ctx.le = true
+  return ctx
+end
+
+local function disass_el(code, addr, out)
+  create_el(code, addr, out):disass()
+end
+
 -- Return register name for RID.
 local function regname(r)
   if r < 32 then return map_gpr[r] end
@@ -586,6 +599,8 @@ end
 return {
   create = create,
   disass = disass,
+  create_el = create_el,
+  disass_el = disass_el,
   regname = regname
 }
 
