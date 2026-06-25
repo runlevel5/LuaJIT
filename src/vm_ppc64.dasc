@@ -1558,10 +1558,9 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.ffunc rawget
   |  cmplwi NARGS8:RC, 16
-  |   lwz CARG4, 0(BASE)
-  |    lwz TAB:CARG2, 4(BASE)
+  |   ld CARG2, 0(BASE)			// GC64: full table TValue.
   |  blt ->fff_fallback
-  |  checktab CARG4; bne ->fff_fallback
+  |  checktab CARG2; bne ->fff_fallback	// Checks itype, masks CARG2 -> GCtab.
   |   la CARG3, 8(BASE)
   |   mr CARG1, L
   |  bl extern lj_tab_get  // (lua_State *L, GCtab *t, cTValue *key)
