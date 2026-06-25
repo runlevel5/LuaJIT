@@ -2827,30 +2827,45 @@ static void build_subroutines(BuildCtx *ctx)
   |.endif
   |.endmacro
   |
+  |// GC64: ExitState.gpr[] is 64-bit; save each GPR with std (no stmd on PPC).
+  |.macro savegpr_, a, b, c, d
+  |  std r..a, 16+32*8+a*8(sp)
+  |  std r..b, 16+32*8+b*8(sp)
+  |  std r..c, 16+32*8+c*8(sp)
+  |  std r..d, 16+32*8+d*8(sp)
+  |.endmacro
+  |
   |->vm_exit_handler:
   |.if JIT
-  |  addi sp, sp, -(16+32*8+32*4)
-  |  stmw r2, 16+32*8+2*4(sp)
+  |  addi sp, sp, -(16+32*8+32*8)	// GC64: 64-bit GPR save area.
+  |  savegpr_ 0,1,2,3			// Save all GPRs (64-bit) before clobbering.
+  |  savegpr_ 4,5,6,7
+  |  savegpr_ 8,9,10,11
+  |  savegpr_ 12,13,14,15
+  |  savegpr_ 16,17,18,19
+  |  savegpr_ 20,21,22,23
+  |  savegpr_ 24,25,26,27
+  |  savegpr_ 28,29,30,31
   |    addi DISPATCH, JGL, -GG_DISP2G-32768
   |    li CARG2, ~LJ_VMST_EXIT
-  |   lwz CARG1, 16+32*8+32*4(sp)	// Get stack chain.
+  |   lp CARG1, 16+32*8+32*8(sp)	// Get stack chain (GC64: 64-bit).
   |    stw CARG2, DISPATCH_GL(vmstate)(DISPATCH)
   |  savex_ 0,1,2,3
-  |   stw CARG1, 0(sp)			// Store extended stack chain.
+  |   stp CARG1, 0(sp)			// Store extended stack chain.
   |   clrso TMP1
   |  savex_ 4,5,6,7
-  |   addi CARG2, sp, 16+32*8+32*4	// Recompute original value of sp.
+  |   addi CARG2, sp, 16+32*8+32*8	// Recompute original value of sp.
   |  savex_ 8,9,10,11
-  |   stw CARG2, 16+32*8+1*4(sp)	// Store sp in RID_SP.
+  |   stp CARG2, 16+32*8+1*8(sp)	// Store sp in RID_SP (GC64).
   |  savex_ 12,13,14,15
   |   mflr CARG3
   |   li TMP1, 0
   |  savex_ 16,17,18,19
-  |   stw TMP1, 16+32*8+0*4(sp)		// Clear RID_TMP.
+  |   stp TMP1, 16+32*8+0*8(sp)		// Clear RID_TMP (GC64).
   |  savex_ 20,21,22,23
   |   lhz CARG4, 2(CARG3)		// Load trace number.
   |  savex_ 24,25,26,27
-  |  lwz L, DISPATCH_GL(cur_L)(DISPATCH)
+  |  lp L, DISPATCH_GL(cur_L)(DISPATCH)		// GC64: 64-bit lua_State *.
   |  savex_ 28,29,30,31
   |   sub CARG3, TMP0, CARG3		// Compute exit number.
   |  lp BASE, DISPATCH_GL(jit_base)(DISPATCH)
@@ -2866,7 +2881,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  bl extern lj_trace_exit		// (jit_State *J, ExitState *ex)
   |  // Returns MULTRES (unscaled) or negated error code.
   |  lp TMP1, L->cframe
-  |  lwz TMP2, 0(sp)
+  |  lp TMP2, 0(sp)			// GC64: 64-bit stack back-chain.
   |   lp BASE, L->base
   |.if GPR64
   |  rldicr sp, TMP1, 0, 61
@@ -2874,7 +2889,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  rlwinm sp, TMP1, 0, 0, 29
   |.endif
   |   lp PC, SAVE_PC			// Get SAVE_PC.
-  |  stw TMP2, 0(sp)
+  |  stp TMP2, 0(sp)			// GC64: 64-bit stack back-chain.
   |  stp L, SAVE_L			// Set SAVE_L (on-trace resume/yield).
   |  b >1
   |.endif
@@ -5433,11 +5448,10 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_JLOOP:
     |.if JIT
     |  // RA = base*8 (ignored), RD = traceno*8
-    |  lwz TMP1, DISPATCH_J(trace)(DISPATCH)
-    |  srwi RD, RD, 1
+    |  lp TMP1, DISPATCH_J(trace)(DISPATCH)		// GC64: 64-bit trace array.
     |  // Traces on PPC don't store the trace number, so use 0.
     |   stw ZERO, DISPATCH_GL(vmstate)(DISPATCH)
-    |  lwzx TRACE:TMP2, TMP1, RD
+    |  ldx TRACE:TMP2, TMP1, RD			// GC64: 8-byte GCRef (RD=traceno*8).
     |  clrso TMP1
     |  lp TMP2, TRACE:TMP2->mcode
     |   stp BASE, DISPATCH_GL(jit_base)(DISPATCH)	// GC64: 64-bit MRef.
