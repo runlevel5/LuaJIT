@@ -2060,58 +2060,64 @@ static void asm_stack_check(ASMState *as, BCReg topslot,
 }
 
 /* Restore Lua stack from on-trace state. */
+/* GC64: build a TValue from a value reference and store it at base+ofs. */
+static void asm_tvstore64(ASMState *as, Reg base, int32_t ofs, IRRef ref)
+{
+  RegSet allow = rset_exclude(RSET_GPR, base);
+  IRIns *ir = IR(ref);
+  lj_assertA(irt_ispri(ir->t) || irt_isaddr(ir->t) || irt_isinteger(ir->t),
+	     "store of IR type %d", irt_type(ir->t));
+  if (irref_isk(ref)) {
+    TValue k;
+    lj_ir_kvalue(as->J->L, &k, ir);
+    emit_tai(as, PPCI_STD, ra_allock(as, (intptr_t)k.u64, allow), base, ofs);
+  } else {
+    Reg src = ra_alloc1(as, ref, allow);
+    rset_clear(allow, src);
+    if (irt_isinteger(ir->t)) {
+      /* TValue = (itype << 47) | (uint32)value. */
+      Reg type = ra_allock(as, (int64_t)irt_toitype(ir->t) << 47, allow);
+      emit_tai(as, PPCI_STD, RID_TMP, base, ofs);
+      emit_tab(as, PPCI_ADD, RID_TMP, RID_TMP, type);
+      emit_rotdi(as, PPCI_RLDICL, RID_TMP, src, 0, 32);  /* clrldi: zero-extend. */
+    } else {
+      /* TValue = (itype << 47) | gcptr (gcptr < 2^47). */
+      Reg type = ra_allock(as, (int64_t)irt_toitype(ir->t) << 47, allow);
+      emit_tai(as, PPCI_STD, RID_TMP, base, ofs);
+      emit_tab(as, PPCI_ADD, RID_TMP, src, type);
+    }
+  }
+}
+
 static void asm_stack_restore(ASMState *as, SnapShot *snap)
 {
   SnapEntry *map = &as->T->snapmap[snap->mapofs];
-  SnapEntry *flinks = &as->T->snapmap[snap_nextofs(as->T, snap)-1];
+#ifdef LUA_USE_ASSERT
+  SnapEntry *flinks = &as->T->snapmap[snap_nextofs(as->T, snap)-1-LJ_FR2];
+#endif
   MSize n, nent = snap->nent;
   /* Store the value of all modified slots to the Lua stack. */
   for (n = 0; n < nent; n++) {
     SnapEntry sn = map[n];
     BCReg s = snap_slot(sn);
-    int32_t ofs = 8*((int32_t)s-1);
+    int32_t ofs = 8*((int32_t)s-1-LJ_FR2);
     IRRef ref = snap_ref(sn);
     IRIns *ir = IR(ref);
     if ((sn & SNAP_NORESTORE))
       continue;
-    if (irt_isnum(ir->t)) {
-#if LJ_SOFTFP
-      Reg tmp;
+    if ((sn & SNAP_KEYINDEX)) {
       RegSet allow = rset_exclude(RSET_GPR, RID_BASE);
-      /* LJ_SOFTFP: must be a number constant. */
-      lj_assertA(irref_isk(ref), "unsplit FP op");
-      tmp = ra_allock(as, (int32_t)ir_knum(ir)->u32.lo, allow);
-      emit_tai(as, PPCI_STW, tmp, RID_BASE, ofs+(LJ_BE?4:0));
-      if (rset_test(as->freeset, tmp+1)) allow = RID2RSET(tmp+1);
-      tmp = ra_allock(as, (int32_t)ir_knum(ir)->u32.hi, allow);
-      emit_tai(as, PPCI_STW, tmp, RID_BASE, ofs+(LJ_BE?0:4));
-#else
+      Reg r = irref_isk(ref) ? ra_allock(as, ir->i, allow) :
+			       ra_alloc1(as, ref, allow);
+      rset_clear(allow, r);
+      emit_tai(as, PPCI_STW, r, RID_BASE, ofs+(LJ_BE?4:0));
+      emit_tai(as, PPCI_STW, ra_allock(as, LJ_KEYINDEX, allow),
+	       RID_BASE, ofs+(LJ_BE?0:4));
+    } else if (irt_isnum(ir->t)) {
       Reg src = ra_alloc1(as, ref, RSET_FPR);
       emit_fai(as, PPCI_STFD, src, RID_BASE, ofs);
-#endif
     } else {
-      Reg type;
-      RegSet allow = rset_exclude(RSET_GPR, RID_BASE);
-      lj_assertA(irt_ispri(ir->t) || irt_isaddr(ir->t) || irt_isinteger(ir->t),
-		 "restore of IR type %d", irt_type(ir->t));
-      if (!irt_ispri(ir->t)) {
-	Reg src = ra_alloc1(as, ref, allow);
-	rset_clear(allow, src);
-	emit_tai(as, PPCI_STW, src, RID_BASE, ofs+4);
-      }
-      if ((sn & (SNAP_CONT|SNAP_FRAME))) {
-	if (s == 0) continue;  /* Do not overwrite link to previous frame. */
-	type = ra_allock(as, (int32_t)(*flinks--), allow);
-#if LJ_SOFTFP
-      } else if ((sn & SNAP_SOFTFPNUM)) {
-	type = ra_alloc1(as, ref+1, rset_exclude(RSET_GPR, RID_BASE));
-#endif
-      } else if ((sn & SNAP_KEYINDEX)) {
-	type = ra_allock(as, (int32_t)LJ_KEYINDEX, allow);
-      } else {
-	type = ra_allock(as, (int32_t)irt_toitype(ir->t), allow);
-      }
-      emit_tai(as, PPCI_STW, type, RID_BASE, ofs);
+      asm_tvstore64(as, RID_BASE, ofs, ref);
     }
     checkmclim(as);
   }
