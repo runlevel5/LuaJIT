@@ -221,22 +221,8 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK };  /* Special continuations. */
 #define CFRAME_SIZE		400
 #define CFRAME_SHIFT_MULTRES	3
 #elif LJ_64
-#if LJ_ARCH_PPC_OPD
-/* PPC64 ELFv1 (big-endian): the C frame info lives ABOVE the callee parameter
-** save area (48..111), which called C functions may clobber. Must match the
-** OPD stack layout in vm_ppc64.dasc.
-*/
-#define CFRAME_OFS_MULTRES	432
-#define CFRAME_OFS_ERRF		428
-#define CFRAME_OFS_NRES		424
-#define CFRAME_OFS_L		416
-#define CFRAME_OFS_PC		408
-#define CFRAME_OFS_PREV		400
-#define CFRAME_SIZE		464
-#define CFRAME_SHIFT_MULTRES	3
-#else
-/* PPC64 ELFv2 (ppc64le): GPR64 layout with 64-bit pointer saves, kept inside
-** our own frame. Must match the GPR64 stack layout in vm_ppc.dasc.
+/* PPC64 ELFv2: GPR64 layout with 64-bit pointer saves, kept inside our own
+** frame. Must match the GPR64 stack layout in vm_ppc64.dasc.
 */
 #define CFRAME_OFS_MULTRES	80
 #define CFRAME_OFS_ERRF		76
@@ -246,7 +232,6 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK };  /* Special continuations. */
 #define CFRAME_OFS_PREV		48
 #define CFRAME_SIZE		400
 #define CFRAME_SHIFT_MULTRES	3
-#endif
 #else
 #define CFRAME_OFS_ERRF		48
 #define CFRAME_OFS_NRES		44

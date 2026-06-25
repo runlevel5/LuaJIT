@@ -135,7 +135,7 @@ static void emit_asm_wordreloc(BuildCtx *ctx, uint8_t *p, int n,
     exit(1);
   }
 #elif LJ_TARGET_PPC
-#if LJ_TARGET_PS3 || LJ_ARCH_PPC_OPD
+#if LJ_TARGET_PS3
 #define TOCPREFIX "."
 #else
 #define TOCPREFIX ""
@@ -173,29 +173,16 @@ static void emit_asm_label(BuildCtx *ctx, const char *name, int size, int isfunc
 {
   switch (ctx->mode) {
   case BUILD_elfasm:
-#if LJ_TARGET_PS3 || LJ_ARCH_PPC_OPD
-    /* ELFv1 (PS3: 32-bit; ppc64: 64-bit) function descriptors in .opd.
-    ** The public symbol is the {entry,TOC,env} descriptor; the code lives at
-    ** the dot-prefixed local entry (cf. TOCPREFIX above for internal branches).
-    */
+#if LJ_TARGET_PS3
     if (!strncmp(name, "lj_vm_", 6) &&
 	strcmp(name, ctx->beginsym) &&
-	/* Dispatch targets are branched to (bctr) with the VM's TOC, not C-called,
-	** so they must stay plain code entries (no .opd descriptor). The hooks are
-	** filtered by name; lj_vm_IITERN is the one non-"hook" dispatch target. */
-	strcmp(name, "lj_vm_IITERN") &&
 	!strstr(name, "hook")) {
       fprintf(ctx->fp,
 	"\n\t.globl %s\n"
 	"\t.section \".opd\",\"aw\"\n"
 	"%s:\n"
-#if LJ_TARGET_PS3
 	"\t.long .%s,.TOC.@tocbase32\n"
 	"\t.size %s,8\n"
-#else
-	"\t.quad .%s,.TOC.@tocbase,0\n"
-	"\t.size %s,24\n"
-#endif
 	"\t.previous\n"
 	"\t.globl .%s\n"
 	"\t.hidden .%s\n"
