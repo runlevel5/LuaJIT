@@ -2863,7 +2863,11 @@ static void build_subroutines(BuildCtx *ctx)
   |  savex_ 16,17,18,19
   |   stp TMP1, 16+32*8+0*8(sp)		// Clear RID_TMP (GC64).
   |  savex_ 20,21,22,23
-  |   lhz CARG4, 2(CARG3)		// Load trace number.
+  |.if ENDIAN_LE
+  |   lhz CARG4, 0(CARG3)		// Trace number = li imm (LE: low halfword @0).
+  |.else
+  |   lhz CARG4, 2(CARG3)		// Trace number = li imm (BE: low halfword @2).
+  |.endif
   |  savex_ 24,25,26,27
   |  lp L, DISPATCH_GL(cur_L)(DISPATCH)		// GC64: 64-bit lua_State *.
   |  savex_ 28,29,30,31
