@@ -2099,52 +2099,24 @@ static void build_subroutines(BuildCtx *ctx)
   |  b ->fff_resn
   |
   |.ffunc_n math_frexp
-  |.if GPR64
-  |  la CARG2, DISPATCH_GL(tmptv)(DISPATCH)
-  |.elif FPU
-  |  la CARG1, DISPATCH_GL(tmptv)(DISPATCH)
-  |.else
-  |  la CARG3, DISPATCH_GL(tmptv)(DISPATCH)
-  |.endif
+  |  la CARG1, DISPATCH_GL(tmptv)(DISPATCH)	// &exp (int*, r3=ptr arg).
   |   lp PC, FRAME_PC(BASE)
-  |  blex frexp
+  |  blex frexp				// frexp(FARG1=x, CARG1) -> FARG1=mantissa, [tmptv]=exp.
   |   lwz TMP1, DISPATCH_GL(tmptv)(DISPATCH)
-  |   la RA, -8(BASE)
-  |.if not DUALNUM
-  |   tonum_i FARG2, TMP1
-  |.endif
-  |.if FPU
-  |  stfd FARG1, 0(RA)
-  |.else
-  |  stw CRET1, 0(RA)
-  |  stw CRET2, 4(RA)
-  |.endif
+  |   la RA, -16(BASE)
+  |  stfd FARG1, 0(RA)			// Mantissa (result[0]).
+  |  clrldi TMP1, TMP1, 32
+  |  add TMP1, TMP1, TISNUM		// Exponent as integer TValue.
   |  li RD, (2+1)*8
-  |.if DUALNUM
-  |   stw TISNUM, 8(RA)
-  |   stw TMP1, 12(RA)
-  |.else
-  |   stfd FARG2, 8(RA)
-  |.endif
+  |  std TMP1, 8(RA)			// Exponent (result[1]).
   |  b ->fff_res
   |
   |.ffunc_n math_modf
-  |.if GPR64
-  |  la CARG2, -8(BASE)
-  |.elif FPU
-  |  la CARG1, -8(BASE)
-  |.else
-  |  la CARG3, -8(BASE)
-  |.endif
+  |  la CARG1, -16(BASE)			// GC64/FR2: &integral (result[0], r3=ptr arg).
   |   lp PC, FRAME_PC(BASE)
-  |  blex modf
-  |   la RA, -8(BASE)
-  |.if FPU
-  |  stfd FARG1, 0(BASE)
-  |.else
-  |  stw CRET1, 0(BASE)
-  |  stw CRET2, 4(BASE)
-  |.endif
+  |  blex modf				// modf(FARG1=x, CARG1) -> FARG1=frac, [CARG1]=integral.
+  |   la RA, -16(BASE)
+  |  stfd FARG1, -8(BASE)		// Fractional part (result[1]).
   |  li RD, (2+1)*8
   |  b ->fff_res
   |
