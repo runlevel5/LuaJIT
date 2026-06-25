@@ -4534,7 +4534,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  add RC, BASE, RC
     |  rldicl TAB:CARG1, TAB:CARG1, 0, 17	// Mask -> GCtab pointer.
     |  lwz TMP0, TAB:CARG1->asize
-    |  lwz CARG2, 0(RC)			// Integer key (low word on LE).
+    |  lwz CARG2, LO(RC)			// Integer key (GC64: low word, endian-aware).
     |   lp TMP1, TAB:CARG1->array
     |  cmplw TMP0, CARG2
     |   slwi TMP2, CARG2, 3
@@ -4756,7 +4756,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  rldicl TAB:CARG2, TAB:CARG2, 0, 17	// Mask -> GCtab pointer.
     |    lbz TMP3, TAB:CARG2->marked
     |  lwz TMP0, TAB:CARG2->asize
-    |  lwz CARG3, 0(RC)			// Integer key (low word on LE).
+    |  lwz CARG3, LO(RC)			// Integer key (GC64: low word, endian-aware).
     |   lp TMP1, TAB:CARG2->array
     |  andix. TMP2, TMP3, LJ_GC_BLACK	// isblack(table)
     |  bne >7
