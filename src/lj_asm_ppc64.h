@@ -1181,7 +1181,15 @@ dotypecheck:
       }
       type = RID_TMP;
     }
-    if (ra_hasreg(dest)) emit_tai(as, PPCI_LWZ, dest, base, ofs);
+    if (ra_hasreg(dest)) {
+      if (irt_isaddr(t)) {
+	/* GC64: load the full 64-bit TValue and mask off the itype. */
+	emit_rotdi(as, PPCI_RLDICL, dest, dest, 0, 17);
+	emit_tai(as, PPCI_LD, dest, base, ofs-4);
+      } else {
+	emit_tai(as, PPCI_LWZ, dest, base, ofs);
+      }
+    }
   }
   if (ra_hasreg(type)) emit_tai(as, PPCI_LWZ, type, base, ofs-4);
 }
@@ -1874,6 +1882,20 @@ static void asm_comp(ASMState *as, IRIns *ir)
     if ((cc & CC_TWO))
       emit_tab(as, PPCI_CROR, ((cc>>4)&3), ((cc>>4)&3), (CC_EQ&3));
     emit_fab(as, PPCI_FCMPU, 0, left, right);
+  } else if (irt_isaddr(ir->t)) {
+    /* GC64: EQ/NE of 64-bit GCobj references (e.g. function-identity guard).
+    ** The constant operand is a KGC, not a KINT, so compare full pointers.
+    */
+    Reg right, left = ra_alloc1(as, ir->op1, RSET_GPR);
+    IRRef rref = ir->op2;
+    asm_guardcc(as, cc);
+    if (irref_isk(rref)) {
+      right = ra_allock(as, (intptr_t)ir_kgc(IR(rref)),
+			rset_exclude(RSET_GPR, left));
+    } else {
+      right = ra_alloc1(as, rref, rset_exclude(RSET_GPR, left));
+    }
+    emit_tab(as, (cc & CC_UNSIGNED) ? PPCI_CMPLD : PPCI_CMPD, 0, left, right);
   } else {
     IRRef lref = ir->op1, rref = ir->op2;
     if (irref_isk(lref) && !irref_isk(rref)) {
