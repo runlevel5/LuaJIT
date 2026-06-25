@@ -42,6 +42,18 @@
 |.define decode_OPP, decode_OP4
 |.endif
 |
+|// Endianness: byte offset of the low/high 32-bit word within a 64-bit slot,
+|// and of the opcode byte within a 32-bit bytecode instruction.
+|.if ENDIAN_LE
+|.define LO, 0
+|.define HI, 4
+|.define OFS_OP, 0
+|.else
+|.define LO, 4
+|.define HI, 0
+|.define OFS_OP, 3
+|.endif
+|
 |// Convenience macros for TOC handling.
 |.if TOC
 |// ELFv2: plain bl + nop. The linker patches the nop to `ld r2, SAVE_TOC`
@@ -4963,45 +4975,29 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |.endif
     |->vm_IITERN:
     |  add RA, BASE, RA
-    |  lwz TAB:RB, -12(RA)
-    |  lwz RC, -4(RA)			// Get index from control var.
+    |  lp TAB:RB, -16(RA)
+    |  lwz RC, -8+LO(RA)			// Get index from control var.
+    |  rldicl TAB:RB, RB, 0, 17		// GC64: mask table pointer.
     |  lwz TMP0, TAB:RB->asize
-    |  lwz TMP1, TAB:RB->array
+    |  lp TMP1, TAB:RB->array
     |   addi PC, PC, 4
     |1:  // Traverse array part.
     |  cmplw RC, TMP0
     |   slwi TMP3, RC, 3
     |  bge >5				// Index points after array part?
-    |  lwzx TMP2, TMP1, TMP3
-    |.if FPU
-    |   lfdx f0, TMP1, TMP3
-    |.else
-    |   lwzux CARG1, TMP3, TMP1
-    |   lwz CARG2, 4(TMP3)
-    |.endif
-    |  checknil TMP2
+    |  ldx TMP2, TMP1, TMP3
+    |  cmpd TMP2, TISNIL
     |     lwz INS, -4(PC)
     |  beq >4
-    |.if DUALNUM
-    |   stw RC, 4(RA)
-    |   stw TISNUM, 0(RA)
-    |.else
-    |   tonum_u f1, RC
-    |.endif
+    |   clrldi CARG1, RC, 32
+    |   add CARG1, CARG1, TISNUM		// GC64: tagged integer key.
+    |  std CARG1, 0(RA)			// Store key.
+    |  std TMP2, 8(RA)			// Store value.
     |    addi RC, RC, 1
     |     addis TMP3, PC, -(BCBIAS_J*4 >> 16)
-    |.if FPU
-    |  stfd f0, 8(RA)
-    |.else
-    |  stw CARG1, 8(RA)
-    |  stw CARG2, 12(RA)
-    |.endif
     |     decode_RD4 TMP1, INS
-    |    stw RC, -4(RA)			// Update control var.
+    |    stw RC, -8+LO(RA)		// Update control var.
     |     add PC, TMP1, TMP3
-    |.if not DUALNUM
-    |   stfd f1, 0(RA)
-    |.endif
     |3:
     |  ins_next
     |
@@ -5011,50 +5007,28 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |
     |5:  // Traverse hash part.
     |  lwz TMP1, TAB:RB->hmask
-    |  sub RC, RC, TMP0
-    |   lwz TMP2, TAB:RB->node
+    |  sub RC, RC, TMP0			// Hash index = index - asize.
+    |   lp NODE:TMP2, TAB:RB->node
     |6:
     |  cmplw RC, TMP1			// End of iteration? Branch to ITERL+1.
     |   slwi TMP3, RC, 5
-    |  bgty <3
+    |  bgt <3
     |   slwi RB, RC, 3
-    |   sub TMP3, TMP3, RB
-    |  lwzx RB, TMP2, TMP3
-    |.if FPU
-    |  lfdx f0, TMP2, TMP3
-    |.else
-    |  add CARG3, TMP2, TMP3
-    |  lwz CARG1, 0(CARG3)
-    |  lwz CARG2, 4(CARG3)
-    |.endif
-    |   add NODE:TMP3, TMP2, TMP3
-    |  checknil RB
+    |   sub TMP3, TMP3, RB		// Hash node offset = hash index * 24.
+    |  ldx CARG1, TMP2, TMP3		// Load node value.
+    |   add NODE:TMP3, TMP2, TMP3		// Compute node address.
+    |  cmpd CARG1, TISNIL
     |     lwz INS, -4(PC)
     |  beq >7
-    |.if FPU
-    |   lfd f1, NODE:TMP3->key
-    |.else
-    |   lwz CARG3, NODE:TMP3->key.u32.hi
-    |   lwz CARG4, NODE:TMP3->key.u32.lo
-    |.endif
+    |   ld RB, NODE:TMP3->key		// Load node key.
+    |  std RB, 0(RA)			// Store key.
+    |  std CARG1, 8(RA)			// Store value.
+    |    add RC, RC, TMP0			// Restore combined index.
     |     addis TMP2, PC, -(BCBIAS_J*4 >> 16)
-    |.if FPU
-    |  stfd f0, 8(RA)
-    |.else
-    |  stw CARG1, 8(RA)
-    |  stw CARG2, 12(RA)
-    |.endif
-    |    add RC, RC, TMP0
     |     decode_RD4 TMP1, INS
-    |.if FPU
-    |   stfd f1, 0(RA)
-    |.else
-    |   stw CARG3, 0(RA)
-    |   stw CARG4, 4(RA)
-    |.endif
     |    addi RC, RC, 1
+    |    stw RC, -8+LO(RA)		// Update control var.
     |     add PC, TMP1, TMP2
-    |    stw RC, -4(RA)			// Update control var.
     |  b <3
     |
     |7:  // Skip holes in hash part.
@@ -5071,9 +5045,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  add TMP3, PC, TMP0			// Target (ITERN) PC, pre-bias.
     |  li TMP0, BC_JMP
     |   li TMP1, BC_ITERC
-    |  stb TMP0, -4(PC)			// Patch ISNEXT -> JMP (LE: opcode @ ofs 0).
+    |  stb TMP0, -4+OFS_OP(PC)		// Patch ISNEXT -> JMP (opcode byte).
     |    addis PC, TMP3, -(BCBIAS_J*4 >> 16)
-    |  stb TMP1, 0(PC)			// Patch ITERN -> ITERC (LE: opcode @ ofs 0).
+    |  stb TMP1, OFS_OP(PC)		// Patch ITERN -> ITERC (opcode byte).
     |  ins_next
     break;
 
