@@ -3097,7 +3097,7 @@ static void build_subroutines(BuildCtx *ctx)
   |->vm_cachesync:
   |.if JIT or FFI
   |  // Compute start of first cache line and number of cache lines.
-  |  rlwinm CARG1, CARG1, 0, 0, 26
+  |  rldicr CARG1, CARG1, 0, 58		// GC64: clrrdi 5 (64-bit; was 32-bit rlwinm).
   |  sub CARG2, CARG2, CARG1
   |  addi CARG2, CARG2, 31
   |  rlwinm. CARG2, CARG2, 27, 5, 31
@@ -3131,28 +3131,34 @@ static void build_subroutines(BuildCtx *ctx)
   |->vm_ffi_callback:
   |.if FFI
   |.type CTSTATE, CTState, PC
+  |  mr r12, r0			// GC64: g (in r0 from gateway; saveregs clobbers r0).
   |  saveregs
-  |  lwz CTSTATE, GL:r12->ctype_state
+  |  lp CTSTATE, GL:r12->ctype_state
   |   addi DISPATCH, r12, GG_G2DISP
-  |  stw r11, CTSTATE->cb.slot
-  |  stw r3, CTSTATE->cb.gpr[0]
-  |   .FPU stfd f1, CTSTATE->cb.fpr[0]
-  |  stw r4, CTSTATE->cb.gpr[1]
-  |   .FPU stfd f2, CTSTATE->cb.fpr[1]
-  |  stw r5, CTSTATE->cb.gpr[2]
-  |   .FPU stfd f3, CTSTATE->cb.fpr[2]
-  |  stw r6, CTSTATE->cb.gpr[3]
-  |   .FPU stfd f4, CTSTATE->cb.fpr[3]
-  |  stw r7, CTSTATE->cb.gpr[4]
-  |   .FPU stfd f5, CTSTATE->cb.fpr[4]
-  |  stw r8, CTSTATE->cb.gpr[5]
-  |   .FPU stfd f6, CTSTATE->cb.fpr[5]
-  |  stw r9, CTSTATE->cb.gpr[6]
-  |   .FPU stfd f7, CTSTATE->cb.fpr[6]
-  |  stw r10, CTSTATE->cb.gpr[7]
-  |   .FPU stfd f8, CTSTATE->cb.fpr[7]
-  |  addi TMP0, sp, CFRAME_SPACE+8
-  |  stw TMP0, CTSTATE->cb.stack
+  |  stw r11, CTSTATE->cb.slot		// slot is a 32-bit MSize.
+  |  stp r3, CTSTATE->cb.gpr[0]
+  |   stfd f1, CTSTATE->cb.fpr[0]
+  |  stp r4, CTSTATE->cb.gpr[1]
+  |   stfd f2, CTSTATE->cb.fpr[1]
+  |  stp r5, CTSTATE->cb.gpr[2]
+  |   stfd f3, CTSTATE->cb.fpr[2]
+  |  stp r6, CTSTATE->cb.gpr[3]
+  |   stfd f4, CTSTATE->cb.fpr[3]
+  |  stp r7, CTSTATE->cb.gpr[4]
+  |   stfd f5, CTSTATE->cb.fpr[4]
+  |  stp r8, CTSTATE->cb.gpr[5]
+  |   stfd f6, CTSTATE->cb.fpr[5]
+  |  stp r9, CTSTATE->cb.gpr[6]
+  |   stfd f7, CTSTATE->cb.fpr[6]
+  |  stp r10, CTSTATE->cb.gpr[7]
+  |   stfd f8, CTSTATE->cb.fpr[7]
+  |   stfd f9, CTSTATE->cb.fpr[8]
+  |   stfd f10, CTSTATE->cb.fpr[9]
+  |   stfd f11, CTSTATE->cb.fpr[10]
+  |   stfd f12, CTSTATE->cb.fpr[11]
+  |   stfd f13, CTSTATE->cb.fpr[12]
+  |  addi TMP0, sp, CFRAME_SPACE+32	// ELFv2: incoming stack args.
+  |  stp TMP0, CTSTATE->cb.stack
   |   mr CARG1, CTSTATE
   |  stp CTSTATE, SAVE_PC		// Any value outside of bytecode is ok.
   |   mr CARG2, sp
@@ -3182,16 +3188,16 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |->cont_ffi_callback:			// Return from FFI callback.
   |.if FFI
-  |  lwz CTSTATE, DISPATCH_GL(ctype_state)(DISPATCH)
+  |  lp CTSTATE, DISPATCH_GL(ctype_state)(DISPATCH)
   |   stp BASE, L->base
   |   stp RB, L->top
   |  stp L, CTSTATE->L
   |  mr CARG1, CTSTATE
   |  mr CARG2, RA
   |  bl extern lj_ccallback_leave	// (CTState *cts, TValue *o)
-  |  lwz CRET1, CTSTATE->cb.gpr[0]
-  |  .FPU lfd FARG1, CTSTATE->cb.fpr[0]
-  |  lwz CRET2, CTSTATE->cb.gpr[1]
+  |  lp CRET1, CTSTATE->cb.gpr[0]
+  |  lfd FARG1, CTSTATE->cb.fpr[0]
+  |  lp CRET2, CTSTATE->cb.gpr[1]
   |  b ->vm_leave_unw
   |.endif
   |

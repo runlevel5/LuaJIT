@@ -72,7 +72,11 @@ static MSize CALLBACK_OFS2SLOT(MSize ofs)
 
 #elif LJ_TARGET_PPC
 
+#if LJ_64
+#define CALLBACK_MCODE_HEAD		56
+#else
 #define CALLBACK_MCODE_HEAD		24
+#endif
 
 #elif LJ_TARGET_MIPS32
 
@@ -215,12 +219,36 @@ static void *callback_mcode_init(global_State *g, uint32_t *page)
   uint32_t *p = page;
   void *target = (void *)lj_vm_ffi_callback;
   MSize slot;
+#if LJ_64
+  /* ppc64 ELFv2: the callback is entered cross-module, so set up r2 (TOC)
+  ** ourselves. Build r12=target, r2=our captured TOC and r0=g inline, then
+  ** branch. Each slot just loads its index into r11 and jumps to this head.
+  ** (Addresses are < 2^47 on Linux, so LI of bits[32:47] doesn't sign-extend.)
+  */
+  intptr_t tg = (intptr_t)target, gv = (intptr_t)g, toc;
+  __asm__ volatile("mr %0, 2" : "=r"(toc));  /* Capture LuaJIT's TOC (r2). */
+  *p++ = PPCI_LI | PPCF_T(RID_R12) | ((tg >> 32) & 0xffff);
+  *p++ = PPCI_LI | PPCF_T(RID_SYS1) | ((toc >> 32) & 0xffff);
+  *p++ = PPCI_LI | PPCF_T(RID_TMP) | ((gv >> 32) & 0xffff);
+  *p++ = PPCI_RLDICR | PPCF_T(RID_R12) | PPCF_A(RID_R12) | PPCF_SH(32) | PPCF_M6(63-32);
+  *p++ = PPCI_RLDICR | PPCF_T(RID_SYS1) | PPCF_A(RID_SYS1) | PPCF_SH(32) | PPCF_M6(63-32);
+  *p++ = PPCI_RLDICR | PPCF_T(RID_TMP) | PPCF_A(RID_TMP) | PPCF_SH(32) | PPCF_M6(63-32);
+  *p++ = PPCI_ORIS | PPCF_A(RID_R12) | PPCF_T(RID_R12) | ((tg >> 16) & 0xffff);
+  *p++ = PPCI_ORIS | PPCF_A(RID_SYS1) | PPCF_T(RID_SYS1) | ((toc >> 16) & 0xffff);
+  *p++ = PPCI_ORIS | PPCF_A(RID_TMP) | PPCF_T(RID_TMP) | ((gv >> 16) & 0xffff);
+  *p++ = PPCI_ORI | PPCF_A(RID_R12) | PPCF_T(RID_R12) | (tg & 0xffff);
+  *p++ = PPCI_ORI | PPCF_A(RID_SYS1) | PPCF_T(RID_SYS1) | (toc & 0xffff);
+  *p++ = PPCI_ORI | PPCF_A(RID_TMP) | PPCF_T(RID_TMP) | (gv & 0xffff);
+  *p++ = PPCI_MTCTR | PPCF_T(RID_R12);
+  *p++ = PPCI_BCTR;
+#else
   *p++ = PPCI_LIS | PPCF_T(RID_TMP) | (u32ptr(target) >> 16);
   *p++ = PPCI_LIS | PPCF_T(RID_R12) | (u32ptr(g) >> 16);
   *p++ = PPCI_ORI | PPCF_A(RID_TMP)|PPCF_T(RID_TMP) | (u32ptr(target) & 0xffff);
   *p++ = PPCI_ORI | PPCF_A(RID_R12)|PPCF_T(RID_R12) | (u32ptr(g) & 0xffff);
   *p++ = PPCI_MTCTR | PPCF_T(RID_TMP);
   *p++ = PPCI_BCTR;
+#endif
   for (slot = 0; slot < CALLBACK_MAX_SLOT; slot++) {
     *p++ = PPCI_LI | PPCF_T(RID_R11) | slot;
     *p = PPCI_B | (((page-p) & 0x00ffffffu) << 2);
@@ -464,6 +492,30 @@ void lj_ccallback_mcode_free(CTState *cts)
 
 #elif LJ_TARGET_PPC
 
+#if LJ_64
+/* ppc64: an FP arg occupies an FPR and also reserves a param-area (GPR) slot. */
+#define CALLBACK_HANDLE_REGARG \
+  if (isfp) { \
+    if (nfpr + 1 <= CCALL_NARG_FPR) { \
+      sp = &cts->cb.fpr[nfpr++]; \
+      cta = ctype_get(cts, CTID_DOUBLE);  /* FPRs always hold doubles. */ \
+      if (ngpr < maxgpr) ngpr++;  /* FP arg also consumes a param slot. */ \
+      goto done; \
+    } \
+  } else {  /* Try to pass argument in GPRs. */ \
+    if (ngpr + n <= maxgpr) { \
+      sp = &cts->cb.gpr[ngpr]; \
+      ngpr += n; \
+      goto done; \
+    } \
+  }
+
+#define CALLBACK_HANDLE_RET \
+  if (ctype_isfp(ctr->info) && ctr->size == sizeof(float)) \
+    *(double *)dp = *(float *)dp;  /* FPRs always hold doubles. */
+
+#else  /* 32-bit PPC */
+
 #define CALLBACK_HANDLE_GPR \
   if (n > 1) { \
     lj_assertCTS(((LJ_ABI_SOFTFP && ctype_isnum(cta->info)) ||  /* double. */ \
@@ -498,6 +550,8 @@ void lj_ccallback_mcode_free(CTState *cts)
 #define CALLBACK_HANDLE_RET \
   if (ctype_isfp(ctr->info) && ctr->size == sizeof(float)) \
     *(double *)dp = *(float *)dp;  /* FPRs always hold doubles. */
+#endif
+
 #endif
 
 #elif LJ_TARGET_MIPS32
@@ -704,6 +758,16 @@ static void callback_conv_result(CTState *cts, lua_State *L, TValue *o)
     if (ctr->size <= 4 &&
 	(LJ_ABI_SOFTFP || ctype_isinteger_or_bool(ctr->info)))
       *(int64_t *)dp = (int64_t)*(int32_t *)dp;
+#endif
+#if LJ_TARGET_PPC && LJ_64
+    /* ppc64 ABI: extend small integer results to a full 64-bit GPR. */
+    if (ctr->size <= 4 &&
+	(ctype_isinteger_or_bool(ctr->info) || ctype_isenum(ctr->info))) {
+      if (ctr->info & CTF_UNSIGNED)
+	*(uint64_t *)dp = (uint64_t)*(uint32_t *)dp;
+      else
+	*(int64_t *)dp = (int64_t)*(int32_t *)dp;
+    }
 #endif
 #if LJ_TARGET_X86
     if (ctype_isfp(ctr->info))
