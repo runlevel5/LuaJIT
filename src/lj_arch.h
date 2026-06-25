@@ -732,7 +732,10 @@ extern void *LJ_WIN_LOADLIBA(const char *path);
 #define LJ_NO_UNWIND		1
 #endif
 
-#if !LJ_NO_UNWIND && !defined(LUAJIT_UNWIND_INTERNAL) && (LJ_ABI_WIN || (defined(LUAJIT_UNWIND_EXTERNAL) && (defined(__GNUC__) || defined(__clang__))))
+/* ppc64 ELFv1 (OPD) uses internal unwinding: external DWARF unwinding needs
+** correct .eh_frame for the JIT/interpreter VM frames on big-endian, which is NYI.
+*/
+#if !LJ_NO_UNWIND && !defined(LUAJIT_UNWIND_INTERNAL) && !defined(LJ_ARCH_PPC_OPD) && (LJ_ABI_WIN || (defined(LUAJIT_UNWIND_EXTERNAL) && (defined(__GNUC__) || defined(__clang__))))
 #define LJ_UNWIND_EXT		1
 #else
 #define LJ_UNWIND_EXT		0

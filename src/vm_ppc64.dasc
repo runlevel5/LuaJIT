@@ -2543,7 +2543,10 @@ static void build_subroutines(BuildCtx *ctx)
   |    addi TMP0, TMP1, 8*LUA_MINSTACK
   |     lp TMP2, L->maxstack
   |   stp PC, SAVE_PC			// Redundant (but a defined value).
-  |.if P64
+  |.if OPD
+  |  lp TOCREG, TOC_OFS(TMP3)		// ELFv1: callee TOC from descriptor.
+  |  lp r12, 0(TMP3)		// ELFv1: entry from descriptor.
+  |.elif P64
   |  mr r12, TMP3		// ELFv2: r12 = entry.
   |.else
   |  .toc lp TMP3, 0(TMP3)
@@ -2553,7 +2556,11 @@ static void build_subroutines(BuildCtx *ctx)
   |    stp TMP1, L->top
   |   mr CARG1, L
   |  bgt >5				// Need to grow stack.
+  |.if P64
+  |  mtctr r12
+  |.else
   |  mtctr TMP3
+  |.endif
   |  bctrl				// (lua_State *L)
   |  // Either throws an error, or recovers and returns -1, 0 or nresults+1.
   |  lp BASE, L->base
