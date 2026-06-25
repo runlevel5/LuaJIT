@@ -135,7 +135,7 @@ static void emit_asm_wordreloc(BuildCtx *ctx, uint8_t *p, int n,
     exit(1);
   }
 #elif LJ_TARGET_PPC
-#if LJ_TARGET_PS3
+#if LJ_TARGET_PS3 || LJ_ARCH_PPC_OPD
 #define TOCPREFIX "."
 #else
 #define TOCPREFIX ""
@@ -173,7 +173,11 @@ static void emit_asm_label(BuildCtx *ctx, const char *name, int size, int isfunc
 {
   switch (ctx->mode) {
   case BUILD_elfasm:
-#if LJ_TARGET_PS3
+#if LJ_TARGET_PS3 || LJ_ARCH_PPC_OPD
+    /* ELFv1 (PS3: 32-bit; ppc64: 64-bit) function descriptors in .opd.
+    ** The public symbol is the {entry,TOC,env} descriptor; the code lives at
+    ** the dot-prefixed local entry (cf. TOCPREFIX above for internal branches).
+    */
     if (!strncmp(name, "lj_vm_", 6) &&
 	strcmp(name, ctx->beginsym) &&
 	!strstr(name, "hook")) {
@@ -181,8 +185,13 @@ static void emit_asm_label(BuildCtx *ctx, const char *name, int size, int isfunc
 	"\n\t.globl %s\n"
 	"\t.section \".opd\",\"aw\"\n"
 	"%s:\n"
+#if LJ_TARGET_PS3
 	"\t.long .%s,.TOC.@tocbase32\n"
 	"\t.size %s,8\n"
+#else
+	"\t.quad .%s,.TOC.@tocbase,0\n"
+	"\t.size %s,24\n"
+#endif
 	"\t.previous\n"
 	"\t.globl .%s\n"
 	"\t.hidden .%s\n"

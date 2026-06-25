@@ -629,7 +629,7 @@ static void build_subroutines(BuildCtx *ctx)
   |6:
   |  ble >7				// Less results wanted?
   |  // More results wanted. Check stack size and fill up results with nil.
-  |  lwz TMP1, L->maxstack
+  |  lp TMP1, L->maxstack
   |  cmplw BASE, TMP1
   |  bge >8
   |  std TISNIL, 0(BASE)			// GC64: full 64-bit nil.
@@ -844,7 +844,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  // (lua_State *L, lua_CFunction func, void *ud, lua_CPFunction cp)
   |  saveregs
   |  mr L, CARG1
-  |   lwz TMP0, L:CARG1->stack
+  |   lp TMP0, L:CARG1->stack
   |  stp CARG1, SAVE_L
   |   lp TMP1, L->top
   |     lp DISPATCH, L->glref		// Setup pointer to dispatch table.
@@ -852,7 +852,10 @@ static void build_subroutines(BuildCtx *ctx)
   |   sub TMP0, TMP0, TMP1		// Compute -savestack(L, L->top).
   |    lp TMP1, L->cframe
   |     addi DISPATCH, DISPATCH, GG_G2DISP
-  |.if P64
+  |.if OPD
+  |  lp TOCREG, TOC_OFS(CARG4)		// ELFv1: callee TOC from descriptor.
+  |  lp r12, 0(CARG4)			// ELFv1: entry from descriptor.
+  |.elif P64
   |  mr r12, CARG4		// ELFv2: r12 = entry for callee global entry.
   |.else
   |  .toc lp CARG4, 0(CARG4)
@@ -863,7 +866,11 @@ static void build_subroutines(BuildCtx *ctx)
   |    stp TMP1, SAVE_CFRAME
   |    stp sp, L->cframe		// Add our C frame to cframe chain.
   |     stp L, DISPATCH_GL(cur_L)(DISPATCH)
+  |.if P64
+  |  mtctr r12
+  |.else
   |  mtctr CARG4
+  |.endif
   |  bctrl			// (lua_State *L, lua_CFunction func, void *ud)
   |.if PPE
   |  mr BASE, CRET1
@@ -1706,7 +1713,7 @@ static void build_subroutines(BuildCtx *ctx)
   |//-- Base library: catch errors ----------------------------------------
   |
   |.ffunc pcall
-  |    lwz TMP1, L->maxstack
+  |    lp TMP1, L->maxstack
   |    add TMP2, BASE, NARGS8:RC
   |  cmplwi NARGS8:RC, 8			// cr0.eq set iff exactly 1 arg (no extras).
   |   lbz TMP3, DISPATCH_GL(hookmask)(DISPATCH)
@@ -1731,7 +1738,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  b ->vm_call_dispatch
   |
   |.ffunc xpcall
-  |  lwz TMP1, L->maxstack
+  |  lp TMP1, L->maxstack
   |   add TMP2, BASE, NARGS8:RC
   |  cmplwi NARGS8:RC, 16
   |   ld CARG1, 0(BASE)			// Function f.
@@ -1775,7 +1782,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  cmplwi cr0, TMP0, LUA_YIELD
   |    lp TMP2, L:CARG1->base
   |   cmplwi cr1, TMP1, 0
-  |   lwz TMP0, L:CARG1->maxstack
+  |   lp TMP0, L:CARG1->maxstack
   |    cmplw cr7, CARG2, TMP2
   |   lp PC, FRAME_PC(BASE)
   |  crorc 4*cr6+lt, 4*cr0+gt, 4*cr1+eq		// st>LUA_YIELD || cframe!=0
@@ -1837,7 +1844,7 @@ static void build_subroutines(BuildCtx *ctx)
   |    st_vmstate
   |   bgt >8
   |  sub RD, TMP3, TMP2
-  |   lwz TMP0, L->maxstack
+  |   lp TMP0, L->maxstack
   |  cmplwi RD, 0
   |   add TMP1, BASE, RD
   |  beq >6				// No results?
@@ -2534,7 +2541,7 @@ static void build_subroutines(BuildCtx *ctx)
   |    add TMP1, BASE, NARGS8:RC
   |   lp PC, FRAME_PC(BASE)		// Fallback may overwrite PC.
   |    addi TMP0, TMP1, 8*LUA_MINSTACK
-  |     lwz TMP2, L->maxstack
+  |     lp TMP2, L->maxstack
   |   stp PC, SAVE_PC			// Redundant (but a defined value).
   |.if P64
   |  mr r12, TMP3		// ELFv2: r12 = entry.
@@ -5081,7 +5088,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ins_next
     |
     |5:  // Copy all varargs.
-    |  lwz TMP0, L->maxstack
+    |  lp TMP0, L->maxstack
     |   li MULTRES, 8			// MULTRES = (0+1)*8
     |  bley <3				// No vararg slots?
     |  add TMP2, RA, TMP1
@@ -5480,7 +5487,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 #endif
   case BC_IFUNCF:
     |  // BASE = new base, RA = BASE+framesize*8, RB = LFUNC, RC = nargs*8
-    |  lwz TMP2, L->maxstack
+    |  lp TMP2, L->maxstack
     |   lbz TMP1, -4+PC2PROTO(numparams)(PC)
     |    lp KBASE, -4+PC2PROTO(k)(PC)
     |  cmplw RA, TMP2
@@ -5514,7 +5521,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 
   case BC_IFUNCV:
     |  // BASE = new base, RA = BASE+framesize*8, RB = LFUNC, RC = nargs*8
-    |  lwz TMP2, L->maxstack
+    |  lp TMP2, L->maxstack
     |   li ITYPE, LJ_TFUNC
     |   add TMP1, BASE, RC		// TMP1 = end of args / new frame.
     |   sldi ITYPE, ITYPE, 47		// GC64 function itype tag.
@@ -5563,8 +5570,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
       |  lp RD, DISPATCH_GL(wrapf)(DISPATCH)
     }
     |   add TMP1, RA, NARGS8:RC
-    |   lwz TMP2, L->maxstack
-    |.if P64
+    |   lp TMP2, L->maxstack
+    |.if OPD
+    |  lp TOCREG, TOC_OFS(RD)		// ELFv1: callee TOC from descriptor.
+    |  lp r12, 0(RD)		// ELFv1: entry from descriptor (RD valid here).
+    |.elif P64
     |  mr r12, RD		// ELFv2: r12 = entry.
     |.else
     |  .toc lp TMP3, 0(RD)
@@ -5575,7 +5585,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |    stp RC, L->top
     |     li_vmstate C
     |.if P64
-    |  mtctr RD
+    |  mtctr r12
     |.else
     |.if TOC
     |  mtctr TMP3

@@ -366,15 +366,19 @@
 #define LJ_ARCH_PPC32ON64	1
 #define LJ_ARCH_NOFFI		1
 #elif LJ_ARCH_BITS == 64
-/* ppc64 (little- or big-endian) targets the ELFv2 ABI in GC64 mode.
-** The two endians share everything except byte order (.if ENDIAN_LE/BE).
+/* ppc64 GC64. ABI is auto-detected: ELFv2 (ppc64le, or BE with -mabi=elfv2) or
+** ELFv1 (traditional big-endian, .opd function descriptors + per-call TOC).
+** Both endians share everything except byte order (.if ENDIAN_LE/BE) and the
+** call ABI (.if OPD).
 */
-#if defined(_CALL_ELF) && _CALL_ELF == 2
 #define LJ_TARGET_GC64		1
+#if defined(_CALL_ELF) && _CALL_ELF == 2
 #define LJ_ARCH_PPC_ELFV2	1
 #else
-#error "ppc64 requires the ELFv2 ABI -- build with -mabi=elfv2"
-#undef LJ_TARGET_PPC
+#define LJ_ARCH_PPC_OPD		1	/* ELFv1 function descriptors. */
+#endif
+#if LJ_ARCH_ENDIAN == LUAJIT_LE && !LJ_ARCH_PPC_ELFV2
+#error "ppc64le requires the ELFv2 ABI"
 #endif
 #endif
 
