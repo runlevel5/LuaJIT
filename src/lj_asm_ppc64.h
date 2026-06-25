@@ -398,7 +398,7 @@ static void asm_retf(ASMState *as, IRIns *ir)
   as->topslot -= (BCReg)delta;
   if ((int32_t)as->topslot < 0) as->topslot = 0;
   irt_setmark(IR(REF_BASE)->t);  /* Children must not coalesce with BASE reg. */
-  emit_setgl64(as, base, jit_base);
+  emit_setgl(as, base, jit_base);
   emit_addptr(as, base, -8*delta);
   asm_guardcc(as, CC_NE);
   emit_ab(as, PPCI_CMPW, RID_TMP,
@@ -416,7 +416,7 @@ static void asm_bufhdr_write(ASMState *as, Reg sb)
   irgc.ot = IRT(0, IRT_PGC);  /* GC type. */
   emit_storeofs(as, &irgc, RID_TMP, sb, offsetof(SBuf, L));
   emit_rot(as, PPCI_RLWIMI, RID_TMP, tmp, 0, 31-lj_fls(SBUF_MASK_FLAG), 31);
-  emit_getgl64(as, RID_TMP, cur_L);
+  emit_getgl(as, RID_TMP, cur_L);
   emit_loadofs(as, &irgc, tmp, sb, offsetof(SBuf, L));
 }
 #endif
@@ -590,10 +590,10 @@ static void asm_tvptr(ASMState *as, Reg dest, IRRef ref, MSize mode)
 #if LJ_SOFTFP
 	lj_assertA(irref_isk(ref), "unsplit FP op");
 	emit_tai(as, PPCI_ADDI, dest, RID_JGL, tmpofs);
-	emit_setgl(as,
+	emit_setgl_u32(as,
 		   ra_allock(as, (int32_t)ir_knum(ir)->u32.lo, RSET_GPR),
 		   tmptv.u32.lo);
-	emit_setgl(as,
+	emit_setgl_u32(as,
 		   ra_allock(as, (int32_t)ir_knum(ir)->u32.hi, RSET_GPR),
 		   tmptv.u32.hi);
 #else
@@ -618,13 +618,13 @@ static void asm_tvptr(ASMState *as, Reg dest, IRRef ref, MSize mode)
       emit_tai(as, PPCI_ADDI, dest, RID_JGL, tmpofs);
       if (!irt_ispri(ir->t)) {
 	Reg src = ra_alloc1(as, ref, RSET_GPR);
-	emit_setgl64(as, src, tmptv.gcr);
+	emit_setgl(as, src, tmptv.gcr);
       }
       if (LJ_SOFTFP && (ir+1)->o == IR_HIOP && !irt_isnil((ir+1)->t))
 	type = ra_alloc1(as, ref+1, RSET_GPR);
       else
 	type = ra_allock(as, irt_toitype(ir->t), RSET_GPR);
-      emit_setgl(as, type, tmptv.it);
+      emit_setgl_u32(as, type, tmptv.it);
     }
   } else {
     emit_tai(as, PPCI_ADDI, dest, RID_JGL, tmpofs);
@@ -1266,10 +1266,10 @@ static void asm_tbar(ASMState *as, IRIns *ir)
   MCLabel l_end = emit_label(as);
   emit_tai(as, PPCI_STW, link, tab, (int32_t)offsetof(GCtab, gclist));
   emit_tai(as, PPCI_STB, mark, tab, (int32_t)offsetof(GCtab, marked));
-  emit_setgl64(as, tab, gc.grayagain);
+  emit_setgl(as, tab, gc.grayagain);
   lj_assertA(LJ_GC_BLACK == 0x04, "bad LJ_GC_BLACK");
   emit_rot(as, PPCI_RLWINM, mark, mark, 0, 30, 28);  /* Clear black bit. */
-  emit_getgl64(as, link, gc.grayagain);
+  emit_getgl(as, link, gc.grayagain);
   emit_condbranch(as, PPCI_BC|PPCF_Y, CC_EQ, l_end);
   emit_asi(as, PPCI_ANDIDOT, RID_TMP, mark, LJ_GC_BLACK);
   emit_tai(as, PPCI_LBZ, mark, tab, (int32_t)offsetof(GCtab, marked));
@@ -2075,8 +2075,8 @@ static void asm_stack_check(ASMState *as, BCReg topslot,
   emit_tab(as, PPCI_SUBF, RID_TMP, pbase, tmp);
   emit_tai(as, PPCI_LWZ, tmp, tmp, offsetof(lua_State, maxstack));
   if (pbase == RID_TMP)
-    emit_getgl64(as, RID_TMP, jit_base);
-  emit_getgl64(as, tmp, cur_L);
+    emit_getgl(as, RID_TMP, jit_base);
+  emit_getgl(as, tmp, cur_L);
   if (allow == RSET_EMPTY)  /* Spill temp. register. */
     emit_tai(as, PPCI_STW, tmp, RID_SP, SPOFS_TMPW);
 }
@@ -2173,8 +2173,8 @@ static void asm_gc_check(ASMState *as)
   /* Jump around GC step if GC total < GC threshold. */
   emit_condbranch(as, PPCI_BC|PPCF_Y, CC_LT, l_end);
   emit_ab(as, PPCI_CMPLW, RID_TMP, tmp);
-  emit_getgl(as, tmp, gc.threshold);
-  emit_getgl(as, RID_TMP, gc.total);
+  emit_getgl_u32(as, tmp, gc.threshold);
+  emit_getgl_u32(as, RID_TMP, gc.total);
   as->gcsteps = 0;
   checkmclim(as);
 }
@@ -2231,7 +2231,7 @@ static Reg asm_head_side_base(ASMState *as, IRIns *irp)
       emit_mr(as, r, irp->r);  /* Move from coalesced parent reg. */
       return irp->r;
     } else {
-      emit_getgl64(as, r, jit_base);  /* Otherwise reload BASE. */
+      emit_getgl(as, r, jit_base);  /* Otherwise reload BASE. */
     }
   }
   return RID_NONE;

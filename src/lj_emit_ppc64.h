@@ -171,15 +171,18 @@ static void emit_lsglptr(ASMState *as, PPCIns pi, Reg r, int32_t ofs)
   emit_tai(as, pi, r, RID_JGL, ofs-32768);
 }
 
+/* GC64: get/set global_State fields. Pointer-sized (64-bit) by default, to match
+** the shared lj_asm.c contract (it uses these for jit_base/cur_L). Use the _u32
+** variants for 32-bit fields (MSize, uint32 tags).
+*/
 #define emit_getgl(as, r, field) \
-  emit_lsglptr(as, PPCI_LWZ, (r), (int32_t)offsetof(global_State, field))
-#define emit_setgl(as, r, field) \
-  emit_lsglptr(as, PPCI_STW, (r), (int32_t)offsetof(global_State, field))
-/* GC64: 64-bit global_State fields (pointers / MRef / GCRef). */
-#define emit_getgl64(as, r, field) \
   emit_lsglptr(as, PPCI_LD, (r), (int32_t)offsetof(global_State, field))
-#define emit_setgl64(as, r, field) \
+#define emit_setgl(as, r, field) \
   emit_lsglptr(as, PPCI_STD, (r), (int32_t)offsetof(global_State, field))
+#define emit_getgl_u32(as, r, field) \
+  emit_lsglptr(as, PPCI_LWZ, (r), (int32_t)offsetof(global_State, field))
+#define emit_setgl_u32(as, r, field) \
+  emit_lsglptr(as, PPCI_STW, (r), (int32_t)offsetof(global_State, field))
 
 /* Trace number is determined from per-trace exit stubs. */
 #define emit_setvmstate(as, i)		UNUSED(i)
