@@ -942,7 +942,7 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |->cont_cat:				// RA = resultptr, RB = meta base
   |  lwz INS, -4(PC)
-  |   subi CARG2, RB, 16
+  |   subi CARG2, RB, 32			// GC64/FR2: 4-slot frame.
   |  decode_RB8 SAVE0, INS
   |.if FPU
   |   lfd f0, 0(RA)
