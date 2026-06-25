@@ -1179,18 +1179,23 @@ static void build_subroutines(BuildCtx *ctx)
   |  b ->cont_nop
   |
   |->cont_condt:			// RA = resultptr
-  |  lwz TMP0, 0(RA)
-  |  .gpr64 extsw TMP0, TMP0
-  |  subfic TMP0, TMP0, LJ_TTRUE	// Branch if result is true.
-  |  subfe CRET1, CRET1, CRET1
-  |  not CRET1, CRET1
+  |  ld TMP0, 0(RA)			// GC64: full result TValue.
+  |  li TMP1, 1
+  |  sldi TMP1, TMP1, 47
+  |  not TMP1, TMP1			// mov_false = ~(1<<47).
+  |  cmpld cr0, TMP0, TMP1		// Truthy iff result < ~(1<<47).
+  |  li TMP1, -1
+  |  isel CRET1, TMP1, ZERO, 4*cr0+lt	// Branch if result is true.
   |  b <4
   |
   |->cont_condf:			// RA = resultptr
-  |  lwz TMP0, 0(RA)
-  |  .gpr64 extsw TMP0, TMP0
-  |  subfic TMP0, TMP0, LJ_TTRUE	// Branch if result is false.
-  |  subfe CRET1, CRET1, CRET1
+  |  ld TMP0, 0(RA)			// GC64: full result TValue.
+  |  li TMP1, 1
+  |  sldi TMP1, TMP1, 47
+  |  not TMP1, TMP1			// mov_false = ~(1<<47).
+  |  cmpld cr0, TMP0, TMP1		// Truthy iff result < ~(1<<47).
+  |  li TMP1, -1
+  |  isel CRET1, ZERO, TMP1, 4*cr0+lt	// Branch if result is false.
   |  b <4
   |
   |->vmeta_equal:
@@ -3573,7 +3578,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ins_next
     |.if FFI
     |3:
-    |  cmpwi CARG1, LJ_TCDATA
+    |  sradi TMP0, CARG1, 47		// GC64: src itype.
+    |  cmpdi TMP0, LJ_TCDATA
     |  beq ->vmeta_equal_cd
     |  b <1
     |.endif
