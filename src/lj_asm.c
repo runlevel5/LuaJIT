@@ -228,7 +228,11 @@ static Reg rset_pickrandom(ASMState *as, RegSet rs)
 #elif LJ_TARGET_ARM64
 #include "lj_emit_arm64.h"
 #elif LJ_TARGET_PPC
+#if LJ_64
+#include "lj_emit_ppc64.h"
+#else
 #include "lj_emit_ppc.h"
+#endif
 #elif LJ_TARGET_MIPS
 #include "lj_emit_mips.h"
 #else
@@ -1714,7 +1718,11 @@ static void asm_loop(ASMState *as)
 #elif LJ_TARGET_ARM64
 #include "lj_asm_arm64.h"
 #elif LJ_TARGET_PPC
+#if LJ_64
+#include "lj_asm_ppc64.h"
+#else
 #include "lj_asm_ppc.h"
+#endif
 #elif LJ_TARGET_MIPS
 #include "lj_asm_mips.h"
 #else

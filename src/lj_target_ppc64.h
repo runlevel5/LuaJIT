@@ -129,6 +129,10 @@ static LJ_AINLINE uint32_t *exitstub_trace_addr_(uint32_t *p, uint32_t exitno)
 #define PPCF_T(r)	((r) << 21)
 #define PPCF_A(r)	((r) << 16)
 #define PPCF_B(r)	((r) << 11)
+#define PPCF_MB(n)	((n) << 6)
+/* MD-form (rldicl/rldicr) split shift and mask-bound fields. */
+#define PPCF_SH(n)	((((n) & 31) << (11+1)) | (((n) & 32) >> (5-1)))
+#define PPCF_M6(n)	((((n) & 31) << (5+1)) | (((n) & 32) << (11-5)))
 #define PPCF_C(r)	((r) << 6)
 #define PPCF_MB(n)	((n) << 6)
 #define PPCF_ME(n)	((n) << 1)
@@ -272,6 +276,36 @@ typedef enum PPCIns {
 
   PPCI_FCMPU = 0xfc000000,
   PPCI_FSEL = 0xfc00002e,
+
+  /* PPC64 instructions (encodings verified via the power ISA assembler). */
+  PPCI_LD = 0xe8000000,
+  PPCI_STD = 0xf8000000,
+  PPCI_LDX = 0x7c00002a,
+  PPCI_STDX = 0x7c00012a,
+
+  PPCI_MULLD = 0x7c0001d2,
+  PPCI_DIVD = 0x7c0003d2,
+  PPCI_DIVDU = 0x7c000392,
+  PPCI_EXTSW = 0x7c0007b4,
+
+  PPCI_CMPD = 0x7c200000,
+  PPCI_CMPLD = 0x7c200040,
+  PPCI_CMPDI = 0x2c200000,
+  PPCI_CMPLDI = 0x28200000,
+
+  PPCI_RLDICL = 0x78000000,
+  PPCI_RLDICR = 0x78000004,
+  PPCI_RLDIC = 0x78000008,
+  PPCI_RLDIMI = 0x7800000c,
+  PPCI_RLDCL = 0x78000010,
+  PPCI_RLDCR = 0x78000012,
+
+  PPCI_MTVSRD = 0x7c000166,
+  PPCI_MFVSRD = 0x7c000066,
+  PPCI_FCFID = 0xfc00069c,
+  PPCI_FCTIDZ = 0xfc00065e,
+
+  PPCI_ISEL = 0x7c00001e,
 } PPCIns;
 
 typedef enum PPCCC {

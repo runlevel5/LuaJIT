@@ -140,7 +140,11 @@ typedef uint32_t RegCost;
 #elif LJ_TARGET_ARM64
 #include "lj_target_arm64.h"
 #elif LJ_TARGET_PPC
+#if LJ_64
+#include "lj_target_ppc64.h"
+#else
 #include "lj_target_ppc.h"
+#endif
 #elif LJ_TARGET_MIPS
 #include "lj_target_mips.h"
 #else

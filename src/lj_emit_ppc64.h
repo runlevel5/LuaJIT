@@ -51,6 +51,26 @@ static void emit_rotlwi(ASMState *as, Reg ra, Reg rs, int32_t n)
   emit_rot(as, PPCI_RLWINM, ra, rs, n, 0, 31);
 }
 
+#if LJ_64
+/* Emit a 64-bit rotate-and-mask (MD-form: rldicl/rldicr/rldic/rldimi).
+** The 6-bit shift and mask fields use the split MD-form encoding.
+*/
+static void emit_rotdi(ASMState *as, PPCIns pi, Reg ra, Reg rs,
+		       int32_t sh, int32_t mbe)
+{
+  lj_assertA(sh >= 0 && sh < 64, "shift out of range");
+  lj_assertA(mbe >= 0 && mbe < 64, "mask bit out of range");
+  *--as->mcp = pi | PPCF_T(rs) | PPCF_A(ra) |
+	       (((sh & 0x1f) << 11) | ((sh & 0x20) >> 4)) |
+	       (((mbe & 0x1f) << 6) | (mbe & 0x20));
+}
+
+static void emit_sldi(ASMState *as, Reg ra, Reg rs, int32_t n)
+{
+  emit_rotdi(as, PPCI_RLDICR, ra, rs, n, 63-n);  /* sldi = rldicr ra,rs,n,63-n */
+}
+#endif
+
 /* -- Emit loads/stores --------------------------------------------------- */
 
 #define jglofs(as, k) \
@@ -99,7 +119,31 @@ static void emit_loadi(ASMState *as, Reg r, int32_t i)
   }
 }
 
+#if LJ_64
+/* Load a 64 bit constant into a GPR. */
+static void emit_loadu64(ASMState *as, Reg r, uint64_t u64)
+{
+  if (checki32((int64_t)u64)) {
+    emit_loadi(as, r, (int32_t)u64);  /* Sign-extends to 64 bit. */
+  } else {
+    uint64_t delta = u64 - (uint64_t)(void *)J2G(as->J);
+    if (delta < 65536) {  /* Use addi from JGL anchor. */
+      emit_tai(as, PPCI_ADDI, r, RID_JGL, (int32_t)(delta-32768));
+    } else {  /* General case: (hi32 << 32) | lo32. Emitted in reverse. */
+      uint32_t lo = (uint32_t)u64;
+      if (lo & 0xffff)
+	emit_asi(as, PPCI_ORI, r, r, lo & 0xffff);
+      if (lo & 0xffff0000u)
+	emit_asi(as, PPCI_ORIS, r, r, (lo >> 16) & 0xffff);
+      emit_sldi(as, r, r, 32);
+      emit_loadi(as, r, (int32_t)(u64 >> 32));  /* hi32; high bits masked off. */
+    }
+  }
+}
+#define emit_loada(as, r, addr)	emit_loadu64(as, (r), (uint64_t)(uintptr_t)(addr))
+#else
 #define emit_loada(as, r, addr)		emit_loadi(as, (r), i32ptr((addr)))
+#endif
 
 static Reg ra_allock(ASMState *as, intptr_t k, RegSet allow);
 
