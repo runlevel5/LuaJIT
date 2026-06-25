@@ -554,12 +554,12 @@
 |
 |// Move table write barrier back. Overwrites mark and tmp.
 |.macro barrierback, tab, mark, tmp
-|  lwz tmp, DISPATCH_GL(gc.grayagain)(DISPATCH)
+|  lp tmp, DISPATCH_GL(gc.grayagain)(DISPATCH)	// GC64: 64-bit GCRef.
 |  // Assumes LJ_GC_BLACK is 0x04.
 |   rlwinm mark, mark, 0, 30, 28		// black2gray(tab)
-|  stw tab, DISPATCH_GL(gc.grayagain)(DISPATCH)
+|  stp tab, DISPATCH_GL(gc.grayagain)(DISPATCH)	// GC64: 64-bit GCRef.
 |   stb mark, tab->marked
-|  stw tmp, tab->gclist
+|  stp tmp, tab->gclist			// GC64: 64-bit GCRef.
 |.endmacro
 |
 |//-----------------------------------------------------------------------
