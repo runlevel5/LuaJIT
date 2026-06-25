@@ -2067,24 +2067,17 @@ static void build_subroutines(BuildCtx *ctx)
   |.if DUALNUM
   |.ffunc math_ldexp
   |  cmplwi NARGS8:RC, 16
-  |   lwz TMP0, 0(BASE)
-  |.if FPU
-  |    lfd FARG1, 0(BASE)
-  |.else
-  |    lwz CARG1, 0(BASE)
-  |    lwz CARG2, 4(BASE)
-  |.endif
-  |   lwz TMP1, 8(BASE)
-  |.if GPR64
-  |    lwz CARG2, 12(BASE)
-  |.elif FPU
-  |    lwz CARG1, 12(BASE)
-  |.else
-  |    lwz CARG3, 12(BASE)
-  |.endif
-  |  blt ->fff_fallback
-  |  checknum TMP0; bge ->fff_fallback
-  |  checknum TMP1; bne ->fff_fallback
+  |   ld CARG1, 0(BASE)			// GC64: arg1 TValue.
+  |    lfd FARG1, 0(BASE)		// x (double).
+  |   ld TMP1, 8(BASE)			// arg2 TValue.
+  |  blt ->fff_fallback			// Need exactly 2 args.
+  |  srdi TMP0, CARG1, 32
+  |  cmplw TMP0, TISNUMhi
+  |  bge ->fff_fallback			// arg1 must be a double (int->fallback).
+  |  srdi TMP0, TMP1, 32
+  |  cmplw TMP0, TISNUMhi
+  |  bne ->fff_fallback			// arg2 must be an integer.
+  |  extsw CARG2, TMP1			// exp; ppc64 ABI: FP arg (f1) skips r3, int arg is r4=CARG2.
   |.else
   |.ffunc_nn math_ldexp
   |.if GPR64
@@ -2097,9 +2090,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  b ->fff_resn
   |
   |.ffunc_n math_frexp
-  |  la CARG1, DISPATCH_GL(tmptv)(DISPATCH)	// &exp (int*, r3=ptr arg).
+  |  la CARG2, DISPATCH_GL(tmptv)(DISPATCH)	// &exp; ppc64 ABI: FP arg (f1) skips r3, so ptr arg is r4=CARG2.
   |   lp PC, FRAME_PC(BASE)
-  |  blex frexp				// frexp(FARG1=x, CARG1) -> FARG1=mantissa, [tmptv]=exp.
+  |  blex frexp				// frexp(FARG1=x, CARG2) -> FARG1=mantissa, [tmptv]=exp.
   |   lwz TMP1, DISPATCH_GL(tmptv)(DISPATCH)
   |   la RA, -16(BASE)
   |  stfd FARG1, 0(RA)			// Mantissa (result[0]).
@@ -2110,9 +2103,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  b ->fff_res
   |
   |.ffunc_n math_modf
-  |  la CARG1, -16(BASE)			// GC64/FR2: &integral (result[0], r3=ptr arg).
+  |  la CARG2, -16(BASE)			// &integral (result[0]); ppc64 ABI: FP arg (f1) skips r3, ptr is r4=CARG2.
   |   lp PC, FRAME_PC(BASE)
-  |  blex modf				// modf(FARG1=x, CARG1) -> FARG1=frac, [CARG1]=integral.
+  |  blex modf				// modf(FARG1=x, CARG2=&integral) -> FARG1=frac, [CARG2]=integral.
   |   la RA, -16(BASE)
   |  stfd FARG1, -8(BASE)		// Fractional part (result[1]).
   |  li RD, (2+1)*8
