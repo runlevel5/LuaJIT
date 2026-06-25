@@ -3077,7 +3077,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  lfs FARG2, 0(sp)
   |  fadd FARG1, FARG1, FARG2
   |  stfd FARG1, 0(sp)
-  |  lwz CRET1, 0(sp)			// GC64/LE: low word at the lower address.
+  |  lwz CRET1, LO(sp)			// GC64: low word (endian-aware).
   |  addi sp, sp, 16
   |  blr
   |.endif
