@@ -4112,13 +4112,13 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_KCDATA:
     |.if FFI
     |  // RA = dst*8, RD = cdata_const*8 (~)
-    |  srwi TMP1, RD, 1
-    |  subfic TMP1, TMP1, -4
+    |  subfic TMP1, RD, -8
     |  ins_next1
-    |  lwzx TMP0, KBASE, TMP1		// KBASE-4-cdata_const*4
+    |  ldx TMP0, KBASE, TMP1		// GC64: KBASE-8-cdata_const*8.
     |  li TMP2, LJ_TCDATA
-    |  stwux TMP2, RA, BASE
-    |  stw TMP0, 4(RA)
+    |  sldi TMP2, TMP2, 47
+    |  or TMP0, TMP0, TMP2		// Tag as cdata.
+    |  stdx TMP0, BASE, RA
     |  ins_next2
     |.endif
     break;
