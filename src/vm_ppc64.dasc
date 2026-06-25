@@ -2040,14 +2040,12 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.ffunc math_log
   |  cmplwi NARGS8:RC, 8
-  |   lwz CARG1, 0(BASE)
+  |   ld CARG1, 0(BASE)			// GC64: full TValue.
+  |    lfd FARG1, 0(BASE)
   |  bne ->fff_fallback			// Need exactly 1 argument.
-  |  checknum CARG1; bge ->fff_fallback
-  |.if FPU
-  |  lfd FARG1, 0(BASE)
-  |.else
-  |  lwz CARG2, 4(BASE)
-  |.endif
+  |  srdi TMP0, CARG1, 32
+  |  cmplw TMP0, TISNUMhi
+  |  bge ->fff_fallback			// Only handle doubles inline (int->fallback).
   |  blex log
   |  b ->fff_resn
   |
@@ -3670,25 +3668,22 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     break;
 
   case BC_ISTYPE:
-    |  // RA = src*8, RD = -type*8
-    |  lwzx TMP0, BASE, RA
-    |  srwi TMP1, RD, 3
+    |  // RA = src*8, RD = -itype*8
+    |  ldx TMP0, BASE, RA			// GC64: full TValue.
+    |  srwi TMP1, RD, 3			// TMP1 = -itype.
     |  ins_next1
-    |.if not PPE and not GPR64
-    |  add. TMP0, TMP0, TMP1
-    |.else
-    |  neg TMP1, TMP1
-    |  cmpw TMP0, TMP1
-    |.endif
+    |  sradi TMP0, TMP0, 47			// TMP0 = itype.
+    |  add. TMP0, TMP0, TMP1			// 0 iff itype matches.
     |  bne ->vmeta_istype
     |  ins_next2
     break;
   case BC_ISNUM:
     |  // RA = src*8, RD = -(TISNUM-1)*8
-    |  lwzx TMP0, BASE, RA
+    |  ldx TMP0, BASE, RA			// GC64: full TValue.
     |  ins_next1
-    |  checknum TMP0
-    |  bge ->vmeta_istype
+    |  srdi TMP0, TMP0, 32			// Hi word.
+    |  cmplw TMP0, TISNUMhi			// Number iff hi <= TISNUMhi.
+    |  bgt ->vmeta_istype
     |  ins_next2
     break;
 
@@ -4537,18 +4532,12 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_TGETR:
     |  // RA = dst*8, RB = table*8, RC = key*8
     |  add RB, BASE, RB
-    |  lwz TAB:CARG1, 4(RB)
-    |.if DUALNUM
+    |  ld TAB:CARG1, 0(RB)			// GC64: table TValue.
     |  add RC, BASE, RC
+    |  rldicl TAB:CARG1, TAB:CARG1, 0, 17	// Mask -> GCtab pointer.
     |  lwz TMP0, TAB:CARG1->asize
-    |  lwz CARG2, 4(RC)
-    |   lwz TMP1, TAB:CARG1->array
-    |.else
-    |  lfdx f0, BASE, RC
-    |  lwz TMP0, TAB:CARG1->asize
-    |  toint CARG2, f0
-    |   lwz TMP1, TAB:CARG1->array
-    |.endif
+    |  lwz CARG2, 0(RC)			// Integer key (low word on LE).
+    |   lp TMP1, TAB:CARG1->array
     |  cmplw TMP0, CARG2
     |   slwi TMP2, CARG2, 3
     |  ble ->vmeta_tgetr		// In array part?
@@ -4764,20 +4753,13 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
   case BC_TSETR:
     |  // RA = dst*8, RB = table*8, RC = key*8
     |  add RB, BASE, RB
-    |  lwz TAB:CARG2, 4(RB)
-    |.if DUALNUM
+    |  ld TAB:CARG2, 0(RB)			// GC64: table TValue.
     |  add RC, BASE, RC
+    |  rldicl TAB:CARG2, TAB:CARG2, 0, 17	// Mask -> GCtab pointer.
     |    lbz TMP3, TAB:CARG2->marked
     |  lwz TMP0, TAB:CARG2->asize
-    |  lwz CARG3, 4(RC)
-    |   lwz TMP1, TAB:CARG2->array
-    |.else
-    |  lfdx f0, BASE, RC
-    |    lbz TMP3, TAB:CARG2->marked
-    |  lwz TMP0, TAB:CARG2->asize
-    |  toint CARG3, f0
-    |   lwz TMP1, TAB:CARG2->array
-    |.endif
+    |  lwz CARG3, 0(RC)			// Integer key (low word on LE).
+    |   lp TMP1, TAB:CARG2->array
     |  andix. TMP2, TMP3, LJ_GC_BLACK	// isblack(table)
     |  bne >7
     |2:
