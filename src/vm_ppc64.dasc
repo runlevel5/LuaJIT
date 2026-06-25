@@ -2703,7 +2703,7 @@ static void build_subroutines(BuildCtx *ctx)
   |   stp PC, SAVE_PC
   |  lp TMP1, LFUNC:TMP1->pc
   |   mr CARG2, PC
-  |   stw L, DISPATCH_J(L)(DISPATCH)
+  |   stp L, DISPATCH_J(L)(DISPATCH)		// GC64: 64-bit lua_State *.
   |  lbz TMP1, PC2PROTO(framesize)(TMP1)
   |   stp BASE, L->base
   |  slwi TMP1, TMP1, 3
@@ -2859,7 +2859,7 @@ static void build_subroutines(BuildCtx *ctx)
   |   subi CARG3, CARG3, 2
   |  stp BASE, L->base
   |   stw CARG4, DISPATCH_J(parent)(DISPATCH)
-  |  stw TMP1, DISPATCH_GL(jit_base)(DISPATCH)
+  |  stp TMP1, DISPATCH_GL(jit_base)(DISPATCH)	// GC64: 64-bit MRef.
   |  addi CARG1, DISPATCH, GG_DISP2J
   |   stw CARG3, DISPATCH_J(exitno)(DISPATCH)
   |  addi CARG2, sp, 16
@@ -2894,7 +2894,7 @@ static void build_subroutines(BuildCtx *ctx)
   |    li TMP2, 0
   |   stw MULTRES, SAVE_MULTRES
   |  lp TMP1, LFUNC:RB->pc
-  |    stw TMP2, DISPATCH_GL(jit_base)(DISPATCH)
+  |    stp TMP2, DISPATCH_GL(jit_base)(DISPATCH)	// GC64: 64-bit MRef.
   |  lp KBASE, PC2PROTO(k)(TMP1)
   |  // Setup type comparison constants.
   |  init_tisnum
@@ -5440,10 +5440,10 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwzx TRACE:TMP2, TMP1, RD
     |  clrso TMP1
     |  lp TMP2, TRACE:TMP2->mcode
-    |   stw BASE, DISPATCH_GL(jit_base)(DISPATCH)
+    |   stp BASE, DISPATCH_GL(jit_base)(DISPATCH)	// GC64: 64-bit MRef.
     |  mtctr TMP2
     |   addi JGL, DISPATCH, GG_DISP2G+32768
-    |   stw L, DISPATCH_GL(tmpbuf.L)(DISPATCH)
+    |   stp L, DISPATCH_GL(tmpbuf.L)(DISPATCH)	// GC64: 64-bit MRef.
     |  bctr
     |.endif
     break;
