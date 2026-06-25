@@ -35,10 +35,6 @@
 |.macro lp, a, b; ld a, b; .endmacro
 |.macro stp, a, b; std a, b; .endmacro
 |.define decode_OPP, decode_OP8
-|.if FFI
-|// Missing: Calling conventions, 64 bit regs, TOC.
-|.error lib_ffi not yet implemented for PPC64
-|.endif
 |.else
 |.macro lpx, a, b, c; lwzx a, b, c; .endmacro
 |.macro lp, a, b; lwz a, b; .endmacro
@@ -3205,59 +3201,65 @@ static void build_subroutines(BuildCtx *ctx)
   |  .type CCSTATE, CCallState, CARG1
   |  lwz TMP1, CCSTATE->spadj
   |    mflr TMP0
-  |   lbz CARG2, CCSTATE->nsp
-  |   lbz CARG3, CCSTATE->nfpr
+  |   lbz CARG2, CCSTATE->nsp		// Stack args size in bytes.
   |  neg TMP1, TMP1
-  |    stw TMP0, 4(sp)
-  |   cmpwi cr1, CARG3, 0
+  |    std TMP0, 16(sp)			// Save LR in caller's frame.
   |  mr TMP2, sp
-  |   addic. CARG2, CARG2, -4
-  |  stwux sp, sp, TMP1
-  |   crnot 4*cr1+eq, 4*cr1+eq		// For vararg calls.
-  |  stw r14, -4(TMP2)
-  |  stw CCSTATE, -8(TMP2)
+  |   addic. CARG2, CARG2, -8		// Byte offset of last stack slot.
+  |  stdux sp, sp, TMP1			// Allocate stack frame.
+  |   std r14, -8(TMP2)
+  |   std CCSTATE, -16(TMP2)
   |  mr r14, TMP2
   |  la TMP1, CCSTATE->stack
-  |   blty >2
-  |  la TMP2, 8(sp)
-  |1:
-  |  lwzx TMP0, TMP1, CARG2
-  |  stwx TMP0, TMP2, CARG2
-  |   addic. CARG2, CARG2, -4
+  |   blt >2				// No stack arguments?
+  |  la TMP2, 32(sp)			// ELFv2 parameter save area.
+  |1:  // Copy stack arguments.
+  |  ldx TMP0, TMP1, CARG2
+  |  stdx TMP0, TMP2, CARG2
+  |   addic. CARG2, CARG2, -8
   |  bge <1
   |2:
-  |  bney cr1, >3
-  |  .FPU lfd f1, CCSTATE->fpr[0]
-  |  .FPU lfd f2, CCSTATE->fpr[1]
-  |  .FPU lfd f3, CCSTATE->fpr[2]
-  |  .FPU lfd f4, CCSTATE->fpr[3]
-  |  .FPU lfd f5, CCSTATE->fpr[4]
-  |  .FPU lfd f6, CCSTATE->fpr[5]
-  |  .FPU lfd f7, CCSTATE->fpr[6]
-  |  .FPU lfd f8, CCSTATE->fpr[7]
-  |3:
-  |   lp TMP0, CCSTATE->func
-  |  lwz CARG2, CCSTATE->gpr[1]
-  |  lwz CARG3, CCSTATE->gpr[2]
-  |  lwz CARG4, CCSTATE->gpr[3]
-  |  lwz CARG5, CCSTATE->gpr[4]
-  |   mtctr TMP0
-  |  lwz r8, CCSTATE->gpr[5]
-  |  lwz r9, CCSTATE->gpr[6]
-  |  lwz r10, CCSTATE->gpr[7]
-  |  lwz CARG1, CCSTATE->gpr[0]		// Do this last, since CCSTATE is CARG1.
+  |  ld r12, CCSTATE->func
+  |  lfd f1, CCSTATE->fpr[0]
+  |  lfd f2, CCSTATE->fpr[1]
+  |  lfd f3, CCSTATE->fpr[2]
+  |  lfd f4, CCSTATE->fpr[3]
+  |  lfd f5, CCSTATE->fpr[4]
+  |  lfd f6, CCSTATE->fpr[5]
+  |  lfd f7, CCSTATE->fpr[6]
+  |  lfd f8, CCSTATE->fpr[7]
+  |  lfd f9, CCSTATE->fpr[8]
+  |  lfd f10, CCSTATE->fpr[9]
+  |  lfd f11, CCSTATE->fpr[10]
+  |  lfd f12, CCSTATE->fpr[11]
+  |  lfd f13, CCSTATE->fpr[12]
+  |  ld CARG2, CCSTATE->gpr[1]
+  |  ld CARG3, CCSTATE->gpr[2]
+  |  ld CARG4, CCSTATE->gpr[3]
+  |  ld CARG5, CCSTATE->gpr[4]
+  |   mtctr r12
+  |  ld r8, CCSTATE->gpr[5]
+  |  ld r9, CCSTATE->gpr[6]
+  |  ld r10, CCSTATE->gpr[7]
+  |   std TOCREG, 24(sp)			// Save TOC around indirect call.
+  |  ld CARG1, CCSTATE->gpr[0]		// Do this last, since CCSTATE is CARG1.
   |   bctrl
-  |  lwz CCSTATE:TMP1, -8(r14)
-  |  lwz TMP2, -4(r14)
-  |   lwz TMP0, 4(r14)
-  |  stw CARG1, CCSTATE:TMP1->gpr[0]
-  |  .FPU stfd FARG1, CCSTATE:TMP1->fpr[0]
-  |  stw CARG2, CCSTATE:TMP1->gpr[1]
+  |   ld TOCREG, 24(sp)			// Restore TOC.
+  |  ld CCSTATE:TMP1, -16(r14)
+  |  ld TMP2, -8(r14)
+  |   ld TMP0, 16(r14)
+  |  std CARG1, CCSTATE:TMP1->gpr[0]
+  |  std CARG2, CCSTATE:TMP1->gpr[1]
+  |   stfd FARG1, CCSTATE:TMP1->fpr[0]
+  |   stfd FARG2, CCSTATE:TMP1->fpr[1]
+  |  stfd f3, CCSTATE:TMP1->fpr[2]		// Up to 8 FPRs for HFA returns.
+  |  stfd f4, CCSTATE:TMP1->fpr[3]
+  |  stfd f5, CCSTATE:TMP1->fpr[4]
+  |  stfd f6, CCSTATE:TMP1->fpr[5]
+  |  stfd f7, CCSTATE:TMP1->fpr[6]
+  |  stfd f8, CCSTATE:TMP1->fpr[7]
   |   mtlr TMP0
-  |  stw CARG3, CCSTATE:TMP1->gpr[2]
   |   mr sp, r14
-  |  stw CARG4, CCSTATE:TMP1->gpr[3]
-  |   mr r14, TMP2
   |  blr
   |.endif
   |// Note: vm_ffi_call must be the last function in this object file!

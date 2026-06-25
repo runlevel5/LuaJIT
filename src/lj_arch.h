@@ -372,6 +372,7 @@
 #if LJ_ARCH_ENDIAN == LUAJIT_LE
 #if defined(_CALL_ELF) && _CALL_ELF == 2
 #define LJ_TARGET_GC64		1	/* ppc64le, ELFv2. */
+#define LJ_ARCH_PPC_ELFV2	1
 #else
 #error "ppc64le requires the ELFv2 ABI"
 #undef LJ_TARGET_PPC
