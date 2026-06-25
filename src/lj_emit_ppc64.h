@@ -175,6 +175,11 @@ static void emit_lsglptr(ASMState *as, PPCIns pi, Reg r, int32_t ofs)
   emit_lsglptr(as, PPCI_LWZ, (r), (int32_t)offsetof(global_State, field))
 #define emit_setgl(as, r, field) \
   emit_lsglptr(as, PPCI_STW, (r), (int32_t)offsetof(global_State, field))
+/* GC64: 64-bit global_State fields (pointers / MRef / GCRef). */
+#define emit_getgl64(as, r, field) \
+  emit_lsglptr(as, PPCI_LD, (r), (int32_t)offsetof(global_State, field))
+#define emit_setgl64(as, r, field) \
+  emit_lsglptr(as, PPCI_STD, (r), (int32_t)offsetof(global_State, field))
 
 /* Trace number is determined from per-trace exit stubs. */
 #define emit_setvmstate(as, i)		UNUSED(i)
