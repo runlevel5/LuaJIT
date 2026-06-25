@@ -636,7 +636,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  lwz TMP1, L->maxstack
   |  cmplw BASE, TMP1
   |  bge >8
-  |  stw TISNIL, 0(BASE)
+  |  std TISNIL, 0(BASE)			// GC64: full 64-bit nil.
   |  addi RD, RD, 8
   |  addi BASE, BASE, 8
   |  b <2
@@ -2803,7 +2803,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  b ->cont_nop
   |
   |9:
-  |  stwx TISNIL, BASE, RC
+  |  stdx TISNIL, BASE, RC		// GC64: full 64-bit nil.
   |  addi RC, RC, 8
   |  b <3
   |.endif
