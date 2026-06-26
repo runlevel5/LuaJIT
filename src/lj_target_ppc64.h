@@ -28,10 +28,13 @@ enum {
   RID_MAX,
   RID_TMP = RID_R0,
 
-  /* Calling conventions. */
+  /* Calling conventions. ELFv2/ppc64: first return in r3 (CRET1), second in r4
+  ** (CRET2). RID_RETLO = the first/main return, RID_RETHI = the second (cf the
+  ** arm64 X0/X1 ordering); used by ra_destpair for two-value returns like
+  ** lj_vm_next (result ptr + next idx). */
   RID_RET = RID_R3,
-  RID_RETHI = RID_R3,
-  RID_RETLO = RID_R4,
+  RID_RETLO = RID_R3,
+  RID_RETHI = RID_R4,
   RID_FPRET = RID_F1,
 
   /* These definitions must match with the *.dasc file(s): */
@@ -78,25 +81,38 @@ enum {
 
 /* Spill slots are 32 bit wide. An even/odd pair is used for FPRs.
 **
-** SPS_FIXED: Available fixed spill slots in interpreter frame.
-** This definition must match with the *.dasc file(s).
+** ELFv2 trace stack frame (relative to the trace's sp; the trace runs in the
+** interpreter's CFRAME, grown by spadjust for spills):
+**   [sp+  0] back-chain
+**   [sp+  8] CR save           \ ABI linkage doublewords -- a C callee invoked
+**   [sp+ 16] LR save           | from the trace WRITES the LR (and maybe CR)
+**   [sp+ 24] TOC save          / slots here (emit_call also uses the TOC slot),
+**   [sp+ 32 .. 95] param save area (8 doublewords; a callee may spill its
+**                  register args here, and outgoing stack args live here).
+**   [sp+ 96 .. 103] SPOFS_TMP scratch dword (FP<->int bounce).
+**   [sp+104 .. 107] SPOFS_TMPW.
+**   [sp+112 ..] general spill slots (sps_scale(SPS_FIRST=28)=112).
+** So the spill region and SPOFS scratch sit ABOVE the linkage+param area that
+** trace->C callees clobber -- this is essential (a spill at sp+16 would be
+** overwritten by the callee's LR save).
 **
+** SPS_FIXED: Available fixed spill slots in interpreter frame.
 ** SPS_FIRST: First spill slot for general use.
-** [sp+12] tmplo word \
-** [sp+ 8] tmphi word / tmp dword, parameter area for callee
-** [sp+ 4] tmpw, LR of callee
-** [sp+ 0] stack chain
 */
-#define SPS_FIXED	7
-#define SPS_FIRST	4
+#define SPS_FIXED	27
+#define SPS_FIRST	28
 
-/* Stack offsets for temporary slots. Used for FP<->int conversions etc.
-** The TMP slot is an 8-byte double at sp+8; TMPLO/TMPHI are its low/high 32-bit
-** words. On LE the low word is at the lower address (sp+8), on BE at sp+12. */
-#define SPOFS_TMPW	4
-#define SPOFS_TMP	8
-#define SPOFS_TMPHI	(LJ_BE ? 8 : 12)
-#define SPOFS_TMPLO	(LJ_BE ? 12 : 8)
+/* Stack offsets for temporary slots, above the ELFv2 linkage+param area so they
+** survive trace->C calls. The TMP slot is an 8-byte double at sp+96. */
+#define SPOFS_TMPW	104
+#define SPOFS_TMP	96
+#define SPOFS_TMPHI	(LJ_BE ? 96 : 100)
+#define SPOFS_TMPLO	(LJ_BE ? 100 : 96)
+
+/* ELFv2 outgoing parameter save area (for trace->C calls with >8 args).
+** NOTE: only safe once the trace frame is grown so sp+32 is fresh; all current
+** IRCALL targets are <=8-arg so no stack args are emitted. */
+#define PPC_SPOFS_PARAM	32
 
 #define sps_scale(slot)		(4 * (int32_t)(slot))
 #define sps_align(slot)		(((slot) - SPS_FIXED + 3) & ~3)

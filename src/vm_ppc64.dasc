@@ -2748,9 +2748,64 @@ static void build_subroutines(BuildCtx *ctx)
   |  blr
   |.endif
   |
+  |// TValue *lj_vm_next(GCtab *t, uint32_t idx)
+  |// CARG1 = t, CARG2 = idx. Returns result TValue* in CRET1, next idx in CRET2.
+  |// Result layout: val @ +0, key @ +8 (same as a Node). Array-part results use a
+  |// 16-byte scratch buffer in the ELFv2 red zone (-16(sp)); hash-part results
+  |// point directly at the Node. Leaf function: only volatile regs clobbered;
+  |// TISNUM/TISNIL (r22/r23, callee-saved) are read-only and valid on-trace.
   |->vm_next:
   |.if JIT
-  |  NYI  // On big-endian.
+  |  lwz TMP0, TAB:CARG1->asize	// TMP0 = asize.
+  |   lp TMP1, TAB:CARG1->array	// TMP1 = array.
+  |1:  // Traverse array part.
+  |  cmplw CARG2, TMP0
+  |  bge >5				// idx >= asize: go to hash part.
+  |  rldicl TMP2, CARG2, 0, 32		// Zero-extend idx.
+  |  slwi TMP2, TMP2, 3			// idx*8.
+  |  ldx TMP2, TMP1, TMP2		// array[idx].
+  |  cmpd TMP2, TISNIL
+  |   addi CARG3, CARG2, 1		// CARG3 = idx+1 (tentative next idx).
+  |  beq >2				// Skip nil holes in array part.
+  |  std TMP2, -16(sp)			// Result val = array[idx].
+  |  rldicl TMP2, CARG2, 0, 32		// Zero-extend idx for the key.
+  |  add TMP2, TMP2, TISNUM		// Tagged integer key = idx.
+  |  std TMP2, -8(sp)			// Result key = integer idx.
+  |  mr CRET2, CARG3			// Next idx = idx+1.
+  |  la CRET1, -16(sp)			// Return the scratch buffer.
+  |  blr
+  |2:
+  |  mr CARG2, CARG3			// idx++ and retry array part.
+  |  b <1
+  |
+  |5:  // Traverse hash part.
+  |  lwz TMP1, TAB:CARG1->hmask	// TMP1 = hmask.
+  |   lp NODE:CARG3, TAB:CARG1->node	// CARG3 = node base.
+  |  sub TMP2, CARG2, TMP0		// hash index = idx - asize.
+  |  add TMP0, TMP0, TMP1		// TMP0 = asize + hmask (limit).
+  |  slwi TMP1, TMP2, 5			// hash index * 32.
+  |  slwi TMP2, TMP2, 3			// hash index * 8.
+  |  sub TMP2, TMP1, TMP2		// hash index * 24 (= sizeof(Node)).
+  |  add NODE:CARG3, NODE:CARG3, TMP2	// node = t->node + (idx-asize)*24.
+  |6:
+  |  cmplw CARG2, TMP0
+  |  bgt >9				// idx > asize+hmask: end of iteration.
+  |  ld TMP2, NODE:CARG3->val
+  |   addi CARG2, CARG2, 1		// idx++.
+  |  cmpd TMP2, TISNIL
+  |  bne >8				// Found a non-nil node value.
+  |  addi NODE:CARG3, NODE:CARG3, 24	// Skip nil holes (sizeof(Node)).
+  |  b <6
+  |8:
+  |  mr CRET2, CARG2			// Next idx = idx+1 (already incremented).
+  |  mr CRET1, NODE:CARG3		// Return the Node (val@0, key@8).
+  |  blr
+  |
+  |9:  // End of iteration. Set the key to nil (not the value).
+  |  std TISNIL, -8(sp)			// Result key = nil.
+  |  mr CRET2, CARG2			// Next idx (unchanged at the limit).
+  |  la CRET1, -16(sp)
+  |  blr
   |.endif
   |
   |//-----------------------------------------------------------------------

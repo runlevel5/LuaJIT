@@ -273,7 +273,10 @@ static int asm_fusemadd(ASMState *as, IRIns *ir, PPCIns pi, PPCIns pir)
 static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 {
   uint32_t n, nargs = CCI_XNARGS(ci);
-  int32_t ofs = 8;
+  /* ELFv2: outgoing stack args go in the param save area at sp+32+, each taking
+  ** a full 8-byte doubleword (the param area and the GPR/FPR register files
+  ** advance in lockstep -- consecutive-doubleword ABI). */
+  int32_t ofs = PPC_SPOFS_PARAM;
   Reg gpr = REGARG_FIRSTGPR;
 #if !LJ_SOFTFP
   Reg fpr = REGARG_FIRSTFPR;
@@ -291,11 +294,12 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 		     "reg %d not free", fpr);  /* Already evicted. */
 	  ra_leftov(as, fpr, ref);
 	  fpr++;
+	  if (gpr <= REGARG_LASTGPR) gpr++; else ofs += 8;  /* Skip param slot. */
 	} else {
 	  Reg r = ra_alloc1(as, ref, RSET_FPR);
-	  if (irt_isnum(ir->t)) ofs = (ofs + 4) & ~4;
-	  emit_spstore(as, ir, r, ofs);
-	  ofs += irt_isnum(ir->t) ? 8 : 4;
+	  emit_fai(as, irt_isnum(ir->t) ? PPCI_STFD : PPCI_STFS, r, RID_SP,
+		   ofs + (irt_isnum(ir->t) || LJ_LE ? 0 : 4));
+	  ofs += 8;
 	}
       } else
 #endif
@@ -307,22 +311,19 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 	  gpr++;
 	} else {
 	  Reg r = ra_alloc1(as, ref, RSET_GPR);
-	  emit_spstore(as, ir, r, ofs);
-	  ofs += 4;
+	  emit_tai(as, irt_is64(ir->t) ? PPCI_STD : PPCI_STW, r, RID_SP,
+		   ofs + (irt_is64(ir->t) || LJ_LE ? 0 : 4));
+	  ofs += 8;
 	}
       }
     } else {
       if (gpr <= REGARG_LASTGPR)
 	gpr++;
       else
-	ofs += 4;
+	ofs += 8;
     }
     checkmclim(as);
   }
-#if !LJ_SOFTFP
-  if ((ci->flags & CCI_VARARG))  /* Vararg calls need to know about FPR use. */
-    emit_tab(as, fpr == REGARG_FIRSTFPR ? PPCI_CRXOR : PPCI_CREQV, 6, 6, 6);
-#endif
 }
 
 /* Setup result reg/sp for call. Evict scratch regs. */
@@ -343,7 +344,8 @@ static void asm_setupresult(ASMState *as, IRIns *ir, const CCallInfo *ci)
     lj_assertA(!irt_ispri(ir->t), "PRI dest");
     if (!LJ_SOFTFP && irt_isfp(ir->t)) {
       if ((ci->flags & CCI_CASTU64)) {
-	/* Use spill slot or temp slots. */
+	/* GC64/ELFv2: the u64 result is returned in a single 64-bit GPR (RID_RET).
+	** Bounce it through a stack slot to reinterpret as a double. */
 	int32_t ofs = ir->s ? sps_scale(ir->s) : SPOFS_TMP;
 	Reg dest = ir->r;
 	if (ra_hasreg(dest)) {
@@ -351,8 +353,7 @@ static void asm_setupresult(ASMState *as, IRIns *ir, const CCallInfo *ci)
 	  ra_modified(as, dest);
 	  emit_fai(as, PPCI_LFD, dest, RID_SP, ofs);
 	}
-	emit_tai(as, PPCI_STW, RID_RETHI, RID_SP, ofs);
-	emit_tai(as, PPCI_STW, RID_RETLO, RID_SP, ofs+4);
+	emit_tai(as, PPCI_STD, RID_RET, RID_SP, ofs);
       } else {
 	ra_destreg(as, ir, RID_FPRET);
       }
