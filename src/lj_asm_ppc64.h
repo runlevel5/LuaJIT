@@ -230,19 +230,21 @@ static void asm_fusexref(ASMState *as, PPCIns pi, Reg rt, IRRef ref,
 	return;
       }
     } else if (ir->o == IR_STRREF) {
+      /* STRREF op1 = string (base pointer), op2 = byte index. Only a constant
+      ** INDEX (op2) folds into the displacement; a constant STRING (op1) is a
+      ** pointer that must be materialized as the base (NOT used as an offset --
+      ** the old irref_isk(op1) branch read IR(op1)->i, a garbage offset, and
+      ** used the index as the base -> SIGSEGV for string.byte(s, var)). */
       lj_assertA(ofs == 0, "bad usage");
       ofs = (int32_t)sizeof(GCstr);
       if (irref_isk(ir->op2)) {
 	ofs += IR(ir->op2)->i;
 	ref = ir->op1;
-      } else if (irref_isk(ir->op1)) {
-	ofs += IR(ir->op1)->i;
-	ref = ir->op2;
       } else {
-	/* NYI: Fuse ADD with constant. */
-	Reg tmp, right, left = ra_alloc2(as, ir, allow);
-	right = (left >> 8); left &= 255;
-	tmp = ra_scratch(as, rset_exclude(rset_exclude(allow, left), right));
+	/* base = string (op1, may be a const GCstr), index = op2. */
+	Reg right, left = ra_alloc1(as, ir->op1, allow);
+	Reg tmp = ra_scratch(as, rset_exclude(allow, left));
+	right = ra_alloc1(as, ir->op2, rset_exclude(rset_exclude(allow, left), tmp));
 	emit_fai(as, pi, rt, tmp, ofs);
 	emit_tab(as, PPCI_ADD, tmp, left, right);
 	return;
@@ -964,37 +966,23 @@ static void asm_fref(ASMState *as, IRIns *ir)
 
 static void asm_strref(ASMState *as, IRIns *ir)
 {
+  /* STRREF: op1 = string (base), op2 = byte index. The result is the address of
+  ** the string's data at that index: strdata = (char *)str + sizeof(GCstr) +
+  ** index. op1 may be a constant GCstr -- ra_alloc1 rematerializes its pointer;
+  ** it is NOT a small-int offset (the old swap-and-use-IR(refk)->i path treated
+  ** a constant string operand as an offset -> garbage base -> SIGSEGV when the
+  ** index was variable, e.g. string.byte(s, var)). Mirrors lj_asm_arm64.h. */
   Reg dest = ra_dest(as, ir, RSET_GPR);
-  IRRef ref = ir->op2, refk = ir->op1;
+  Reg base = ra_alloc1(as, ir->op1, RSET_GPR);
+  IRIns *irr = IR(ir->op2);
   int32_t ofs = (int32_t)sizeof(GCstr);
-  Reg r;
-  if (irref_isk(ref)) {
-    IRRef tmp = refk; refk = ref; ref = tmp;
-  } else if (!irref_isk(refk)) {
-    Reg right, left = ra_alloc1(as, ir->op1, RSET_GPR);
-    IRIns *irr = IR(ir->op2);
-    if (ra_hasreg(irr->r)) {
-      ra_noweak(as, irr->r);
-      right = irr->r;
-    } else if (mayfuse(as, irr->op2) &&
-	       irr->o == IR_ADD && irref_isk(irr->op2) &&
-	       checki16(ofs + IR(irr->op2)->i)) {
-      ofs += IR(irr->op2)->i;
-      right = ra_alloc1(as, irr->op1, rset_exclude(RSET_GPR, left));
-    } else {
-      right = ra_allocref(as, ir->op2, rset_exclude(RSET_GPR, left));
-    }
+  if (irref_isk(ir->op2) && checki16(ofs + irr->i)) {
+    emit_tai(as, PPCI_ADDI, dest, base, ofs + irr->i);
+  } else {
+    Reg idx = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, base));
     emit_tai(as, PPCI_ADDI, dest, dest, ofs);
-    emit_tab(as, PPCI_ADD, dest, left, right);
-    return;
+    emit_tab(as, PPCI_ADD, dest, base, idx);
   }
-  r = ra_alloc1(as, ref, RSET_GPR);
-  ofs += IR(refk)->i;
-  if (checki16(ofs))
-    emit_tai(as, PPCI_ADDI, dest, r, ofs);
-  else
-    emit_tab(as, PPCI_ADD, dest, r,
-	     ra_allock(as, ofs, rset_exclude(RSET_GPR, r)));
 }
 
 /* -- Loads and stores ---------------------------------------------------- */
