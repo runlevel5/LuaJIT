@@ -208,7 +208,8 @@ static void asm_fusexref(ASMState *as, PPCIns pi, Reg rt, IRRef ref,
   if (ra_noreg(ir->r) && canfuse(as, ir)) {
     if (ir->o == IR_ADD) {
       int32_t ofs2;
-      if (irref_isk(ir->op2) && (ofs2 = ofs + IR(ir->op2)->i, checki16(ofs2))) {
+      if (irref_isk(ir->op2) && checki32(ofs + get_kval(as, ir->op2)) &&
+	  (ofs2 = ofs + (int32_t)get_kval(as, ir->op2), checki16(ofs2))) {
 	ofs = ofs2;
 	ref = ir->op1;
       } else if (ofs == 0) {
@@ -396,12 +397,21 @@ static void asm_callx(ASMState *as, IRIns *ir)
   func = ir->op2; irf = IR(func);
   if (irf->o == IR_CARG) { func = irf->op1; irf = IR(func); }
   if (irref_isk(func)) {  /* Call to constant address. */
-    ci.func = (ASMFunction)(void *)(intptr_t)(irf->i);
-  } else {  /* Need a non-argument register for indirect calls. */
+    ci.func = (ASMFunction)(void *)get_kval(as, func);
+  } else {  /* Indirect call: load target into r12 (ELFv2 global-entry reg). */
+    /* ELFv2: the callee recomputes its own r2/TOC from r12 and does NOT restore
+    ** the caller's r2 -- so we must save/restore our TOC (RID_SYS1 = r2) around
+    ** the call ourselves, exactly like emit_call() does for constant targets. */
     RegSet allow = RSET_GPR & ~RSET_RANGE(RID_R0, REGARG_LASTGPR+1);
-    Reg freg = ra_alloc1(as, func, allow);
+    Reg freg;
+    emit_tai(as, PPCI_LD, RID_SYS1, RID_SP, PPC_TOC_SAVE_OFS);  /* restore r2. */
     *--as->mcp = PPCI_BCTRL;
-    *--as->mcp = PPCI_MTCTR | PPCF_T(freg);
+    *--as->mcp = PPCI_MTCTR | PPCF_T(RID_R12);
+    emit_tai(as, PPCI_STD, RID_SYS1, RID_SP, PPC_TOC_SAVE_OFS);  /* save r2. */
+    /* Move the target into r12 (excluded from arg regs). */
+    allow &= ~RID2RSET(RID_R12);
+    freg = ra_alloc1(as, func, allow);
+    emit_mr(as, RID_R12, freg);
     ci.func = (ASMFunction)(void *)0;
   }
   asm_gencall(as, &ci, args);
