@@ -266,7 +266,7 @@ static void emit_movrr(ASMState *as, IRIns *ir, Reg dst, Reg src)
 static void emit_loadofs(ASMState *as, IRIns *ir, Reg r, Reg base, int32_t ofs)
 {
   if (r < RID_MAX_GPR)
-    emit_tai(as, PPCI_LWZ, r, base, ofs);
+    emit_tai(as, irt_is64(ir->t) ? PPCI_LD : PPCI_LWZ, r, base, ofs);
   else
     emit_fai(as, irt_isnum(ir->t) ? PPCI_LFD : PPCI_LFS, r, base, ofs);
 }
@@ -275,7 +275,7 @@ static void emit_loadofs(ASMState *as, IRIns *ir, Reg r, Reg base, int32_t ofs)
 static void emit_storeofs(ASMState *as, IRIns *ir, Reg r, Reg base, int32_t ofs)
 {
   if (r < RID_MAX_GPR)
-    emit_tai(as, PPCI_STW, r, base, ofs);
+    emit_tai(as, irt_is64(ir->t) ? PPCI_STD : PPCI_STW, r, base, ofs);
   else
     emit_fai(as, irt_isnum(ir->t) ? PPCI_STFD : PPCI_STFS, r, base, ofs);
 }
