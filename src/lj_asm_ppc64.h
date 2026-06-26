@@ -317,11 +317,32 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 #if !LJ_SOFTFP
   Reg fpr = REGARG_FIRSTFPR;
 #endif
-  /* The trace frame reserves only PPC_MAX_PARAM_SLOTS doublewords of ELFv2
-  ** param-save area; bail to the interpreter (which grows its own frame) for a
-  ** C-call with more scalar args than will fit. */
-  if (nargs > PPC_MAX_PARAM_SLOTS)
-    lj_trace_err(as->J, LJ_TRERR_NYICALL);
+  /* Outgoing C-call stack args (the ELFv2 param save area beyond r3..r10 /
+  ** f1..f13) are NYI for traces: emitting them correctly requires growing the
+  ** trace's own frame for the param area AND rematerializing any constant args
+  ** each loop iteration (a hoist into a callee-saved reg such as RID_BASE=r14
+  ** corrupts BASE / yields stale args -> SIGSEGV). Bail to the interpreter,
+  ** which marshals these correctly via vm_ffi_call (it grows its frame). */
+  {
+    Reg cg = REGARG_FIRSTGPR;
+#if !LJ_SOFTFP
+    Reg cf = REGARG_FIRSTFPR;
+#endif
+    for (n = 0; n < nargs; n++) {
+      IRIns *ir = IR(args[n]);
+#if !LJ_SOFTFP
+      if (args[n] && irt_isfp(ir->t)) {
+	if (cf > REGARG_LASTFPR) lj_trace_err(as->J, LJ_TRERR_NYICALL);
+	cf++;
+	if (cg <= REGARG_LASTGPR) cg++;
+      } else
+#endif
+      {
+	if (cg > REGARG_LASTGPR) lj_trace_err(as->J, LJ_TRERR_NYICALL);
+	cg++;
+      }
+    }
+  }
   if ((void *)ci->func)
     emit_call(as, (void *)ci->func);
   for (n = 0; n < nargs; n++) {  /* Setup args. */
