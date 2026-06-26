@@ -2717,11 +2717,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  lp TMP1, L->cframe
   |  lp TMP2, 0(sp)			// GC64: 64-bit stack back-chain.
   |   lp BASE, L->base
-  |.if GPR64
   |  rldicr sp, TMP1, 0, 61
-  |.else
-  |  rlwinm sp, TMP1, 0, 0, 29
-  |.endif
   |   lp PC, SAVE_PC			// Get SAVE_PC.
   |  stp TMP2, 0(sp)			// GC64: 64-bit stack back-chain.
   |  stp L, SAVE_L			// Set SAVE_L (on-trace resume/yield).
@@ -2851,12 +2847,8 @@ static void build_subroutines(BuildCtx *ctx)
   |->vm_modi:
   |  divwo. TMP0, CARG1, CARG2
   |  bso >1
-  |.if GPR64
   |   xor CARG3, CARG1, CARG2
   |   cmpwi CARG3, 0
-  |.else
-  |   xor. CARG3, CARG1, CARG2
-  |.endif
   |  mullw TMP0, TMP0, CARG2
   |  sub CARG1, CARG1, TMP0
   |   bgelr
@@ -3844,7 +3836,6 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |.endmacro
 
   case BC_ADDVN: case BC_ADDNV: case BC_ADDVV:
-    |.if GPR64
     |.macro addo32., y, a, b
     |  // Need to check overflow for (a<<32) + (b<<32).
     |  rldicr TMP0, a, 32, 31
@@ -3853,12 +3844,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  add y, a, b
     |.endmacro
     |  ins_arith addo32., fadd, __adddf3
-    |.else
-    |  ins_arith addo., fadd, __adddf3
-    |.endif
     break;
   case BC_SUBVN: case BC_SUBNV: case BC_SUBVV:
-    |.if GPR64
     |.macro subo32., y, a, b
     |  // Need to check overflow for (a<<32) - (b<<32).
     |  rldicr TMP0, a, 32, 31
@@ -3867,9 +3854,6 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  sub y, a, b
     |.endmacro
     |  ins_arith subo32., fsub, __subdf3
-    |.else
-    |  ins_arith subo., fsub, __subdf3
-    |.endif
     break;
   case BC_MULVN: case BC_MULNV: case BC_MULVV:
     |  ins_arith mullwo., fmul, __muldf3
@@ -5397,35 +5381,18 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     }
     |   add TMP1, RA, NARGS8:RC
     |   lp TMP2, L->maxstack
-    |.if P64
     |  mr r12, RD		// ELFv2: r12 = entry.
-    |.else
-    |  .toc lp TMP3, 0(RD)
-    |.endif
     |    add RC, BASE, NARGS8:RC
     |   stp BASE, L->base
     |   cmplw TMP1, TMP2
     |    stp RC, L->top
     |     li_vmstate C
-    |.if P64
     |  mtctr r12
-    |.else
-    |.if TOC
-    |  mtctr TMP3
-    |.else
-    |  mtctr RD
-    |.endif
-    |.endif
     if (op == BC_FUNCCW) {
       |  lp CARG2, CFUNC:RB->f
     }
     |  mr CARG1, L
     |   bgt ->vm_growstack_c		// Need to grow stack.
-    |.if P64
-    |.else
-    |  .toc lp TOCREG, TOC_OFS(RD)
-    |  .tocenv lp ENVREG, ENV_OFS(RD)
-    |.endif
     |     st_vmstate
     |  bctrl				// (lua_State *L [, lua_CFunction f])
     |  // Returns nresults.
