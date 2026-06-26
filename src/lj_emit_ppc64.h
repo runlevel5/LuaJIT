@@ -154,6 +154,7 @@ static void emit_loadu64(ASMState *as, Reg r, uint64_t u64)
 #endif
 
 static Reg ra_allock(ASMState *as, intptr_t k, RegSet allow);
+static void ra_allockreg(ASMState *as, intptr_t k, Reg r);
 
 /* Get/set from constant pointer. */
 static void emit_lsptr(ASMState *as, PPCIns pi, Reg r, void *p, RegSet allow)
@@ -229,12 +230,17 @@ static void emit_call(ASMState *as, void *target)
   ptrdiff_t delta = (char *)target - (char *)p;
   if ((((delta>>2) + 0x00800000) >> 24) == 0) {
     *p = PPCI_BL | (delta & 0x03fffffcu);
-  } else {  /* Target out of range: need indirect call. Don't use arg reg. */
-    RegSet allow = RSET_GPR & ~RSET_RANGE(RID_R0, REGARG_LASTGPR+1);
-    Reg r = ra_allock(as, i32ptr(target), allow);
+  } else {
+    /* Target out of BL range (common on the BE host, where trace mcode is far
+    ** from libluajit): indirect call via the ELFv2 global entry. The address
+    ** MUST be in r12 so the callee's global-entry prologue recomputes r2 from
+    ** r12; r2 (RID_SYS1, reserved) already holds this module's TOC, so the same
+    ** value is restored. Materialize the FULL 64-bit address (i32ptr truncated
+    ** it -> wild call). */
     *p = PPCI_BCTRL;
-    p[-1] = PPCI_MTCTR | PPCF_T(r);
+    p[-1] = PPCI_MTCTR | PPCF_T(RID_R12);
     as->mcp = p-1;
+    ra_allockreg(as, i64ptr(target), RID_R12);
   }
 }
 
