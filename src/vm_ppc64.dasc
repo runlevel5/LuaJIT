@@ -2938,14 +2938,14 @@ static void build_subroutines(BuildCtx *ctx)
   |   decode_RA8 RA, INS
   |  lpx TMP0, DISPATCH, TMP1
   |  mtctr TMP0
-  |  cmplwi TMP1, BC_FUNCF*4		// Function header?
+  |  cmplwi TMP1, BC_FUNCF*8		// Function header? (GC64: 8-byte dispatch.)
   |  bge >2
   |   decode_RB8 RB, INS
   |   decode_RD8 RD, INS
   |   decode_RC8 RC, INS
   |  bctr
   |2:
-  |  cmplwi TMP1, (BC_FUNCC+2)*4	// Fast function?
+  |  cmplwi TMP1, (BC_FUNCC+2)*8	// Fast function? (GC64: 8-byte dispatch.)
   |  blt >3
   |  // Check frame below fast function.
   |  lp TMP1, FRAME_PC(BASE)

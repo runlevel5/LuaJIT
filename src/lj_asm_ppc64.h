@@ -1095,9 +1095,16 @@ static void asm_ahustore(ASMState *as, IRIns *ir)
 
 static void asm_sload(ASMState *as, IRIns *ir)
 {
-  int32_t ofs = 8*((int32_t)ir->op1-1) + ((ir->op2 & IRSLOAD_FRAME) ? 0 : 4);
+  /* GC64/FR2: each frame slot is a full 8-byte TValue and the FR2 frame has
+  ** two header slots, so slot N lives at base + 8*(N-2). The integer/value half
+  ** of a TValue is the low 32 bits (LE: ofs+0, BE: ofs+4); the itype is in the
+  ** high bits. */
+  int32_t ofs = 8*((int32_t)ir->op1-2);
   IRType1 t = ir->t;
-  Reg dest = RID_NONE, type = RID_NONE, base;
+  Reg dest = RID_NONE, base;
+#if LJ_SOFTFP
+  Reg type = RID_NONE;
+#endif
   RegSet allow = RSET_GPR;
   int hiop = (LJ_SOFTFP && (ir+1)->o == IR_HIOP);
   if (hiop)
@@ -1161,37 +1168,48 @@ static void asm_sload(ASMState *as, IRIns *ir)
 dotypecheck:
   if (irt_isnum(t)) {
     if ((ir->op2 & IRSLOAD_TYPECHECK)) {
-      Reg tisnum = ra_allock(as, (int32_t)LJ_TISNUM, allow);
-      asm_guardcc(as, CC_GE);
-#if !LJ_SOFTFP
-      type = RID_TMP;
-#endif
-      emit_ab(as, PPCI_CMPLW, type, tisnum);
+      /* Number type check: load the full TValue, extract the high 32 bits
+      ** (= itype<<15) and compare against TISNUMhi. number iff itype<=LJ_TISNUM,
+      ** i.e. (high>>... ) <= TISNUMhi. Exit (not a number) on CC_LT. */
+      Reg tisnumhi = ra_allock(as, (int32_t)(LJ_TISNUM << 15), allow);
+      asm_guardcc(as, CC_LT);
+      emit_ab(as, PPCI_CMPLW, tisnumhi, RID_TMP);
+      emit_rotdi(as, PPCI_RLDICL, RID_TMP, RID_TMP, 32, 32);  /* srdi 32. */
+      emit_tai(as, PPCI_LD, RID_TMP, base, ofs);
     }
     if (ra_hasreg(dest)) emit_fai(as, LJ_SOFTFP ? PPCI_LWZ : PPCI_LFD, dest,
-				  base, ofs-(LJ_SOFTFP?0:4));
-  } else {
+				  base, ofs+(LJ_SOFTFP?(LJ_BE?4:0):0));
+  } else if (irt_isint(t)) {
     if ((ir->op2 & IRSLOAD_TYPECHECK)) {
+      /* Integer type check: high 32 bits must equal TISNUMhi exactly. */
+      Reg tisnumhi = ra_allock(as, (int32_t)(LJ_TISNUM << 15), allow);
       asm_guardcc(as, CC_NE);
       if ((ir->op2 & IRSLOAD_KEYINDEX)) {
+	/* keyindex marker: high word == LJ_KEYINDEX. */
 	emit_ai(as, PPCI_CMPWI, RID_TMP, (LJ_KEYINDEX & 0xffff));
 	emit_asi(as, PPCI_XORIS, RID_TMP, RID_TMP, (LJ_KEYINDEX >> 16));
       } else {
-	emit_ai(as, PPCI_CMPWI, RID_TMP, irt_toitype(t));
+	emit_ab(as, PPCI_CMPLW, RID_TMP, tisnumhi);
       }
-      type = RID_TMP;
+      emit_rotdi(as, PPCI_RLDICL, RID_TMP, RID_TMP, 32, 32);  /* srdi 32. */
+      emit_tai(as, PPCI_LD, RID_TMP, base, ofs);
+    }
+    if (ra_hasreg(dest))
+      emit_tai(as, PPCI_LWZ, dest, base, ofs+(LJ_BE?4:0));
+  } else {
+    /* Address type check: extract the itype via sradi 47 and compare. */
+    if ((ir->op2 & IRSLOAD_TYPECHECK)) {
+      asm_guardcc(as, CC_NE);
+      emit_ai(as, PPCI_CMPDI, RID_TMP, irt_toitype(t));
+      emit_sradi(as, RID_TMP, RID_TMP, 47);
+      emit_tai(as, PPCI_LD, RID_TMP, base, ofs);
     }
     if (ra_hasreg(dest)) {
-      if (irt_isaddr(t)) {
-	/* GC64: load the full 64-bit TValue and mask off the itype. */
-	emit_rotdi(as, PPCI_RLDICL, dest, dest, 0, 17);
-	emit_tai(as, PPCI_LD, dest, base, ofs-4);
-      } else {
-	emit_tai(as, PPCI_LWZ, dest, base, ofs);
-      }
+      /* GC64: load the full 64-bit TValue and mask off the itype. */
+      emit_rotdi(as, PPCI_RLDICL, dest, dest, 0, 17);
+      emit_tai(as, PPCI_LD, dest, base, ofs);
     }
   }
-  if (ra_hasreg(type)) emit_tai(as, PPCI_LWZ, type, base, ofs-4);
 }
 
 /* -- Allocations --------------------------------------------------------- */

@@ -69,6 +69,14 @@ static void emit_sldi(ASMState *as, Reg ra, Reg rs, int32_t n)
 {
   emit_rotdi(as, PPCI_RLDICR, ra, rs, n, 63-n);  /* sldi = rldicr ra,rs,n,63-n */
 }
+
+/* sradi rA,rS,sh: arithmetic shift right doubleword immediate (XS-form). */
+static void emit_sradi(ASMState *as, Reg ra, Reg rs, int32_t sh)
+{
+  lj_assertA(sh >= 0 && sh < 64, "shift out of range");
+  *--as->mcp = PPCI_SRADI | PPCF_T(rs) | PPCF_A(ra) |
+	       (((sh & 0x1f) << 11) | ((sh & 0x20) >> 4));
+}
 #endif
 
 /* -- Emit loads/stores --------------------------------------------------- */
