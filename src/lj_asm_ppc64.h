@@ -5,6 +5,25 @@
 
 /* -- Register allocator extensions --------------------------------------- */
 
+/* Get the integer value of a constant operand, handling both KINT and the
+** 64-bit KINT64/KPTR/KGC/KNULL constants (e.g. pointer-offset consts in p64
+** arithmetic are KINT64, whose ->i field is 0 -- reading ->i would lose the
+** value). Returns the full intptr_t value. */
+static intptr_t get_kval(ASMState *as, IRRef ref)
+{
+  IRIns *ir = IR(ref);
+  if (ir->o == IR_KINT64)
+    return (intptr_t)ir_kint64(ir)->u64;
+#if LJ_GC64
+  else if (ir->o == IR_KGC)
+    return (intptr_t)ir_kgc(ir);
+  else if (ir->o == IR_KPTR || ir->o == IR_KKPTR)
+    return (intptr_t)ir_kptr(ir);
+#endif
+  else
+    return (intptr_t)ir->i;
+}
+
 /* Allocate a register with a hint. */
 static Reg ra_hintalloc(ASMState *as, IRRef ref, Reg hint, RegSet allow)
 {
@@ -1379,8 +1398,8 @@ static void asm_add(ASMState *as, IRIns *ir)
     Reg dest = ra_dest(as, ir, RSET_GPR);
     Reg right, left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
     PPCIns pi;
-    if (irref_isk(ir->op2)) {
-      int32_t k = IR(ir->op2)->i;
+    if (irref_isk(ir->op2) && checki32(get_kval(as, ir->op2))) {
+      int32_t k = (int32_t)get_kval(as, ir->op2);
       if (checki16(k)) {
 	pi = PPCI_ADDI;
 	/* May fail due to spills/restores above, but simplifies the logic. */
@@ -1424,13 +1443,11 @@ static void asm_sub(ASMState *as, IRIns *ir)
     PPCIns pi = PPCI_SUBF;
     Reg dest = ra_dest(as, ir, RSET_GPR);
     Reg left, right;
-    if (irref_isk(ir->op1)) {
-      int32_t k = IR(ir->op1)->i;
-      if (checki16(k)) {
-	right = ra_alloc1(as, ir->op2, RSET_GPR);
-	emit_tai(as, PPCI_SUBFIC, dest, right, k);
-	return;
-      }
+    if (irref_isk(ir->op1) && checki16(get_kval(as, ir->op1))) {
+      int32_t k = (int32_t)get_kval(as, ir->op1);
+      right = ra_alloc1(as, ir->op2, RSET_GPR);
+      emit_tai(as, PPCI_SUBFIC, dest, right, k);
+      return;
     }
     /* May fail due to spills/restores above, but simplifies the logic. */
     if (as->flagmcp == as->mcp) {
@@ -1455,12 +1472,10 @@ static void asm_mul(ASMState *as, IRIns *ir)
     PPCIns pi = PPCI_MULLW;
     Reg dest = ra_dest(as, ir, RSET_GPR);
     Reg right, left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
-    if (irref_isk(ir->op2)) {
-      int32_t k = IR(ir->op2)->i;
-      if (checki16(k)) {
-	emit_tai(as, PPCI_MULLI, dest, left, k);
-	return;
-      }
+    if (irref_isk(ir->op2) && checki16(get_kval(as, ir->op2))) {
+      int32_t k = (int32_t)get_kval(as, ir->op2);
+      emit_tai(as, PPCI_MULLI, dest, left, k);
+      return;
     }
     /* May fail due to spills/restores above, but simplifies the logic. */
     if (as->flagmcp == as->mcp) {
