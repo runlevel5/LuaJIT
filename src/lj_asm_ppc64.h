@@ -1392,7 +1392,10 @@ static void asm_tbar(ASMState *as, IRIns *ir)
   Reg mark = ra_scratch(as, rset_exclude(RSET_GPR, tab));
   Reg link = RID_TMP;
   MCLabel l_end = emit_label(as);
-  emit_tai(as, PPCI_STW, link, tab, (int32_t)offsetof(GCtab, gclist));
+  /* GC64: gclist is a 64-bit GCRef. Storing it with stw leaves the high 32 bits
+  ** stale (fatal on BE: the GC later traverses g->gc.grayagain and dereferences
+  ** the corrupted gclist -> wild pointer in propagatemark). Use std. */
+  emit_tai(as, PPCI_STD, link, tab, (int32_t)offsetof(GCtab, gclist));
   emit_tai(as, PPCI_STB, mark, tab, (int32_t)offsetof(GCtab, marked));
   emit_setgl(as, tab, gc.grayagain);
   lj_assertA(LJ_GC_BLACK == 0x04, "bad LJ_GC_BLACK");
@@ -2478,9 +2481,12 @@ static void asm_tail_fixup(ASMState *as, TraceNo lnk)
   MCode *mcp = as->mctail;
   int32_t spadj = as->T->spadjust;
   if (spadj) {  /* Emit stack adjustment. */
+    /* GC64/ELFv2: grow with stdu (64-bit back-chain); stwu would write only the
+    ** low 32 bits and corrupt the back-chain (fatal on BE). spadj is a multiple
+    ** of 4 (sps_scale), so its low 2 bits don't clobber the DS-form XO. */
     lj_assertA(checki16(CFRAME_SIZE+spadj), "stack adjustment out of range");
     *mcp++ = PPCI_ADDI | PPCF_T(RID_TMP) | PPCF_A(RID_SP) | (CFRAME_SIZE+spadj);
-    *mcp++ = PPCI_STWU | PPCF_T(RID_TMP) | PPCF_A(RID_SP) | spadj;
+    *mcp++ = PPCI_STDU | PPCF_T(RID_TMP) | PPCF_A(RID_SP) | spadj;
   }
   /* Emit exit branch. */
   if ((((target - (uintptr_t)mcp) + 0x02000000u) >> 26) == 0) {

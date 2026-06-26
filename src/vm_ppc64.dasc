@@ -2623,9 +2623,12 @@ static void build_subroutines(BuildCtx *ctx)
   |  bctr
   |
   |5:  // Dispatch to static entry of original ins replaced by BC_JLOOP.
-  |  lwz TMP1, DISPATCH_J(trace)(DISPATCH)
-  |  decode_RD4 RD, INS
-  |  lwzx TRACE:TMP1, TMP1, RD
+  |  // GC64: J->trace is a 64-bit pointer to an array of 8-byte GCRefs; load
+  |  // both with full-width ops (lwz/lwzx + RD4 read the wrong half on BE ->
+  |  // wild jump). Mirror BC_JLOOP: lp + decode_RD8 + ldx.
+  |  lp TMP1, DISPATCH_J(trace)(DISPATCH)
+  |  decode_RD8 RD, INS
+  |  ldx TRACE:TMP1, TMP1, RD
   |  lwz INS, TRACE:TMP1->startins
   |  decode_OPP TMP1, INS
   |  addi TMP1, TMP1, GG_DISP2STATIC

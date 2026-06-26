@@ -262,6 +262,7 @@ typedef enum PPCIns {
   PPCI_STH = 0xb0000000,
 
   PPCI_STWU = 0x94000000,
+  PPCI_STDU = 0xf8000001,	/* Store doubleword with update (DS-form, XO=1). */
 
   PPCI_LFS = 0xc0000000,
   PPCI_LFD = 0xc8000000,

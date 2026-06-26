@@ -311,7 +311,11 @@ static void emit_addptr(ASMState *as, Reg r, int32_t ofs)
 static void emit_spsub(ASMState *as, int32_t ofs)
 {
   if (ofs) {
-    emit_tai(as, PPCI_STWU, RID_TMP, RID_SP, -ofs);
+    /* GC64/ELFv2: the stack back-chain is a 64-bit pointer -- grow the frame
+    ** with stdu (not stwu, which would write only the low 32 bits and corrupt
+    ** the back-chain, fatally on BE). ofs is a multiple of 4 (sps_scale), so its
+    ** low 2 bits don't clobber the DS-form XO. */
+    emit_tai(as, PPCI_STDU, RID_TMP, RID_SP, -ofs);
     emit_tai(as, PPCI_ADDI, RID_TMP, RID_SP,
 	     CFRAME_SIZE + (as->parent ? as->parent->spadjust : 0));
   }
