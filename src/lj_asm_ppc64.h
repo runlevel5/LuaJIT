@@ -920,7 +920,7 @@ static PPCIns asm_fxloadins(ASMState *as, IRIns *ir)
   case IRT_U16: return PPCI_LHZ;
   case IRT_NUM: lj_assertA(!LJ_SOFTFP, "unsplit FP op"); return PPCI_LFD;
   case IRT_FLOAT: if (!LJ_SOFTFP) return PPCI_LFS;
-  default: return PPCI_LWZ;
+  default: return irt_is64(ir->t) ? PPCI_LD : PPCI_LWZ;
   }
 }
 
@@ -932,7 +932,7 @@ static PPCIns asm_fxstoreins(ASMState *as, IRIns *ir)
   case IRT_I16: case IRT_U16: return PPCI_STH;
   case IRT_NUM: lj_assertA(!LJ_SOFTFP, "unsplit FP op"); return PPCI_STFD;
   case IRT_FLOAT: if (!LJ_SOFTFP) return PPCI_STFS;
-  default: return PPCI_STW;
+  default: return irt_is64(ir->t) ? PPCI_STD : PPCI_STW;
   }
 }
 
