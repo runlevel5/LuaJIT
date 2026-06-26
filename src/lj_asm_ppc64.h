@@ -670,43 +670,35 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
   int destused = ra_used(ir);
   Reg dest = ra_dest(as, ir, allow);
   Reg tab = ra_alloc1(as, ir->op1, rset_clear(allow, dest));
-  Reg key = RID_NONE, tmp1 = RID_TMP, tmp2;
-  Reg tisnum = RID_NONE, tmpnum = RID_NONE;
+  Reg tmp1 = RID_TMP, tmp2, type = RID_NONE, key = RID_NONE, tkey;
   IRRef refkey = ir->op2;
   IRIns *irkey = IR(refkey);
   int isk = irref_isk(refkey);
   IRType1 kt = irkey->t;
   uint32_t khash;
-  MCLabel l_end, l_loop, l_next;
+  MCLabel l_end, l_loop;
 
   rset_clear(allow, tab);
-#if LJ_SOFTFP
-  if (!isk) {
-    key = ra_alloc1(as, refkey, allow);
-    rset_clear(allow, key);
-    if (irkey[1].o == IR_HIOP) {
-      if (ra_hasreg((irkey+1)->r)) {
-	tmpnum = (irkey+1)->r;
-	ra_noweak(as, tmpnum);
-      } else {
-	tmpnum = ra_allocref(as, refkey+1, allow);
-      }
-      rset_clear(allow, tmpnum);
-    }
-  }
-#else
-  if (irt_isnum(kt)) {
-    key = ra_alloc1(as, refkey, RSET_FPR);
-    tmpnum = ra_scratch(as, rset_exclude(RSET_FPR, key));
-    tisnum = ra_allock(as, (int32_t)LJ_TISNUM, allow);
-    rset_clear(allow, tisnum);
-  } else if (!irt_ispri(kt)) {
-    key = ra_alloc1(as, refkey, allow);
-    rset_clear(allow, key);
-  }
-#endif
   tmp2 = ra_scratch(as, allow);
   rset_clear(allow, tmp2);
+
+  /* GC64: allocate/build the full 64-bit tagged key (tkey) outside the loop. */
+  if (isk) {
+    int64_t kk;
+    if (irt_isaddr(kt)) {
+      kk = ((int64_t)irt_toitype(kt) << 47) | (int64_t)ir_kgc(irkey);
+    } else if (irt_isnum(kt)) {
+      kk = (int64_t)ir_knum(irkey)->u64;  /* -0.0 already canonicalized. */
+    } else {
+      lj_assertA(irt_ispri(kt) && !irt_isnil(kt), "bad HREF key type");
+      kk = ~((int64_t)~irt_toitype(kt) << 47);
+    }
+    tkey = ra_allock(as, (intptr_t)kk, allow);
+    rset_clear(allow, tkey);
+  } else {
+    tkey = ra_scratch(as, allow);
+    rset_clear(allow, tkey);
+  }
 
   /* Key not found in chain: jump to exit (if merged) or load niltv. */
   l_end = emit_label(as);
@@ -718,40 +710,45 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
 
   /* Follow hash chain until the end. */
   l_loop = --as->mcp;
-  emit_ai(as, PPCI_CMPWI, dest, 0);
-  emit_tai(as, PPCI_LWZ, dest, dest, (int32_t)offsetof(Node, next));
-  l_next = emit_label(as);
+  emit_ai(as, PPCI_CMPDI, dest, 0);
+  emit_tai(as, PPCI_LD, dest, dest, (int32_t)offsetof(Node, next));
 
-  /* Type and value comparison. */
+  /* Type and value comparison: one 64-bit compare of the whole Node.key. */
   if (merge == IR_EQ)
     asm_guardcc(as, CC_EQ);
   else
     emit_condbranch(as, PPCI_BC|PPCF_Y, CC_EQ, l_end);
-  if (!LJ_SOFTFP && irt_isnum(kt)) {
-    emit_fab(as, PPCI_FCMPU, 0, tmpnum, key);
-    emit_condbranch(as, PPCI_BC, CC_GE, l_next);
-    emit_ab(as, PPCI_CMPLW, tmp1, tisnum);
-    emit_fai(as, PPCI_LFD, tmpnum, dest, (int32_t)offsetof(Node, key.n));
-  } else {
-    if (!irt_ispri(kt)) {
-      emit_ab(as, PPCI_CMPW, tmp2, key);
-      emit_condbranch(as, PPCI_BC, CC_NE, l_next);
-    }
-    if (LJ_SOFTFP && ra_hasreg(tmpnum))
-      emit_ab(as, PPCI_CMPW, tmp1, tmpnum);
-    else
-      emit_ai(as, PPCI_CMPWI, tmp1, irt_toitype(irkey->t));
-    if (!irt_ispri(kt))
-      emit_tai(as, PPCI_LWZ, tmp2, dest, (int32_t)offsetof(Node, key.gcr));
-  }
-  emit_tai(as, PPCI_LWZ, tmp1, dest, (int32_t)offsetof(Node, key.it));
+  emit_ab(as, PPCI_CMPD, tmp1, tkey);
+  emit_tai(as, PPCI_LD, tmp1, dest, (int32_t)offsetof(Node, key));
   *l_loop = PPCI_BC | PPCF_Y | PPCF_CC(CC_NE) |
 	    (((char *)as->mcp-(char *)l_loop) & 0xffffu);
+
+  /* Construct tkey as a canonicalized or tagged key for non-const keys. */
+  if (!isk) {
+    if (irt_isnum(kt)) {
+      key = ra_alloc1(as, refkey, RSET_FPR);
+      /* tkey = the double's 64-bit bit pattern, bounced through the stack, with
+      ** -0.0 canonicalized to +0.0: if the pattern == 0x8000..0 (negative zero)
+      ** select the literal 0 instead (isel rT,0,rC on cr0.EQ; rA=0 means the XO
+      ** add-form literal zero). */
+      Reg neg0 = ra_allock(as, (intptr_t)U64x(80000000,00000000), allow);
+      emit_tab(as, PPCI_ISEL | PPCF_MB(CC_EQ&3), tkey, 0, tkey);
+      emit_ab(as, PPCI_CMPD, tkey, neg0);
+      emit_tai(as, PPCI_LD, tkey, RID_SP, SPOFS_TMP);
+      emit_fai(as, PPCI_STFD, key, RID_SP, SPOFS_TMP);
+    } else {
+      lj_assertA(irt_isaddr(kt), "bad HREF key type");
+      key = ra_alloc1(as, refkey, allow);
+      rset_clear(allow, key);
+      type = ra_allock(as, (int64_t)irt_toitype(kt) << 47, allow);
+      emit_tab(as, PPCI_ADD, tkey, key, type);  /* tkey = (itype<<47) | ptr. */
+    }
+  }
 
   /* Load main position relative to tab->node into dest. */
   khash = isk ? ir_khash(as, irkey) : 1;
   if (khash == 0) {
-    emit_tai(as, PPCI_LWZ, dest, tab, (int32_t)offsetof(GCtab, node));
+    emit_tai(as, PPCI_LD, dest, tab, (int32_t)offsetof(GCtab, node));
   } else {
     Reg tmphash = tmp1;
     if (isk)
@@ -759,7 +756,7 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
     emit_tab(as, PPCI_ADD, dest, dest, tmp1);
     emit_tai(as, PPCI_MULLI, tmp1, tmp1, sizeof(Node));
     emit_asb(as, PPCI_AND, tmp1, tmp2, tmphash);
-    emit_tai(as, PPCI_LWZ, dest, tab, (int32_t)offsetof(GCtab, node));
+    emit_tai(as, PPCI_LD, dest, tab, (int32_t)offsetof(GCtab, node));
     emit_tai(as, PPCI_LWZ, tmp2, tab, (int32_t)offsetof(GCtab, hmask));
     if (isk) {
       /* Nothing to do. */
@@ -771,19 +768,13 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
       emit_asb(as, PPCI_XOR, tmp1, tmp1, tmp2);
       emit_rotlwi(as, tmp1, tmp1, (HASH_ROT2+HASH_ROT1)&31);
       emit_tab(as, PPCI_SUBF, tmp2, dest, tmp2);
-      if (LJ_SOFTFP ? (irkey[1].o == IR_HIOP) : irt_isnum(kt)) {
-#if LJ_SOFTFP
-	emit_asb(as, PPCI_XOR, tmp2, key, tmp1);
-	emit_rotlwi(as, dest, tmp1, HASH_ROT1);
-	emit_tab(as, PPCI_ADD, tmp1, tmpnum, tmpnum);
-#else
-	int32_t ofs = ra_spill(as, irkey);
+      if (irt_isnum(kt)) {
+	/* Hash the low/high 32-bit words of the canonicalized double in tkey. */
 	emit_asb(as, PPCI_XOR, tmp2, tmp2, tmp1);
 	emit_rotlwi(as, dest, tmp1, HASH_ROT1);
 	emit_tab(as, PPCI_ADD, tmp1, tmp1, tmp1);
-	emit_tai(as, PPCI_LWZ, tmp2, RID_SP, ofs+4);
-	emit_tai(as, PPCI_LWZ, tmp1, RID_SP, ofs);
-#endif
+	emit_rotdi(as, PPCI_RLDICL, tmp2, tkey, 32, 32);  /* hi32 of tkey. */
+	emit_rotdi(as, PPCI_RLDICL, tmp1, tkey, 0, 32);   /* lo32 of tkey. */
       } else {
 	emit_asb(as, PPCI_XOR, tmp2, key, tmp1);
 	emit_rotlwi(as, dest, tmp1, HASH_ROT1);
@@ -800,12 +791,14 @@ static void asm_hrefk(ASMState *as, IRIns *ir)
   IRIns *irkey = IR(kslot->op1);
   int32_t ofs = (int32_t)(kslot->op2 * sizeof(Node));
   int32_t kofs = ofs + (int32_t)offsetof(Node, key);
-  Reg dest = (ra_used(ir)||ofs > 32736) ? ra_dest(as, ir, RSET_GPR) : RID_NONE;
+  int bigofs = (ofs > 32736);
+  Reg dest = (ra_used(ir)||bigofs) ? ra_dest(as, ir, RSET_GPR) : RID_NONE;
   Reg node = ra_alloc1(as, ir->op1, RSET_GPR);
-  Reg key = RID_NONE, type = RID_TMP, idx = node;
+  Reg idx = node;
   RegSet allow = rset_exclude(RSET_GPR, node);
+  uint64_t k;
   lj_assertA(ofs % sizeof(Node) == 0, "unaligned HREFK slot");
-  if (ofs > 32736) {
+  if (bigofs) {
     idx = dest;
     rset_clear(allow, dest);
     kofs = (int32_t)offsetof(Node, key);
@@ -813,25 +806,17 @@ static void asm_hrefk(ASMState *as, IRIns *ir)
     emit_tai(as, PPCI_ADDI, dest, node, ofs);
   }
   asm_guardcc(as, CC_NE);
-  if (!irt_ispri(irkey->t)) {
-    key = ra_scratch(as, allow);
-    rset_clear(allow, key);
-  }
-  rset_clear(allow, type);
-  if (irt_isnum(irkey->t)) {
-    emit_cmpi(as, key, (int32_t)ir_knum(irkey)->u32.lo);
-    asm_guardcc(as, CC_NE);
-    emit_cmpi(as, type, (int32_t)ir_knum(irkey)->u32.hi);
+  /* GC64: build the full 64-bit tagged key and compare the whole Node.key. */
+  if (irt_ispri(irkey->t)) {
+    k = ~((uint64_t)~irt_toitype(irkey->t) << 47);
+  } else if (irt_isnum(irkey->t)) {
+    k = ir_knum(irkey)->u64;
   } else {
-    if (ra_hasreg(key)) {
-      emit_cmpi(as, key, irkey->i);  /* May use RID_TMP, i.e. type. */
-      asm_guardcc(as, CC_NE);
-    }
-    emit_ai(as, PPCI_CMPWI, type, irt_toitype(irkey->t));
+    k = ((uint64_t)irt_toitype(irkey->t) << 47) | (uint64_t)ir_kgc(irkey);
   }
-  if (ra_hasreg(key)) emit_tai(as, PPCI_LWZ, key, idx, kofs+4);
-  emit_tai(as, PPCI_LWZ, type, idx, kofs);
-  if (ofs > 32736) {
+  emit_ab(as, PPCI_CMPD, RID_TMP, ra_allock(as, (intptr_t)k, allow));
+  emit_tai(as, PPCI_LD, RID_TMP, idx, kofs);
+  if (bigofs) {
     emit_tai(as, PPCI_ADDIS, dest, dest, (ofs + 32768) >> 16);
     emit_tai(as, PPCI_ADDI, dest, node, ofs);
   }
