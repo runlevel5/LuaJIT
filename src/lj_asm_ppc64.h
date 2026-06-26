@@ -820,10 +820,12 @@ static void asm_uref(ASMState *as, IRIns *ir)
 {
   Reg dest = ra_dest(as, ir, RSET_GPR);
   int guarded = (irt_t(ir->t) & (IRT_GUARD|IRT_TYPE)) == (IRT_GUARD|IRT_PGC);
+  /* GC64: upvalue pointers (GCfuncL.uvptr[] entries, GCupval.v) are 64-bit
+  ** GCRef/MRef -- load with LD and index the uvptr array by 8, not 4. */
   if (irref_isk(ir->op1) && !guarded) {
     GCfunc *fn = ir_kfunc(IR(ir->op1));
     MRef *v = &gcref(fn->l.uvptr[(ir->op2 >> 8)])->uv.v;
-    emit_lsptr(as, PPCI_LWZ, dest, v, RSET_GPR);
+    emit_lsptr(as, PPCI_LD, dest, v, RSET_GPR);
   } else {
     if (guarded) {
       asm_guardcc(as, ir->o == IR_UREFC ? CC_NE : CC_EQ);
@@ -832,16 +834,15 @@ static void asm_uref(ASMState *as, IRIns *ir)
     if (ir->o == IR_UREFC)
       emit_tai(as, PPCI_ADDI, dest, dest, (int32_t)offsetof(GCupval, tv));
     else
-      emit_tai(as, PPCI_LWZ, dest, dest, (int32_t)offsetof(GCupval, v));
+      emit_tai(as, PPCI_LD, dest, dest, (int32_t)offsetof(GCupval, v));
     if (guarded)
       emit_tai(as, PPCI_LBZ, RID_TMP, dest, (int32_t)offsetof(GCupval, closed));
     if (irref_isk(ir->op1)) {
       GCfunc *fn = ir_kfunc(IR(ir->op1));
-      int32_t k = (int32_t)gcrefu(fn->l.uvptr[(ir->op2 >> 8)]);
-      emit_loadi(as, dest, k);
+      emit_loadu64(as, dest, gcrefu(fn->l.uvptr[(ir->op2 >> 8)]));
     } else {
-      emit_tai(as, PPCI_LWZ, dest, ra_alloc1(as, ir->op1, RSET_GPR),
-	       (int32_t)offsetof(GCfuncL, uvptr) + 4*(int32_t)(ir->op2 >> 8));
+      emit_tai(as, PPCI_LD, dest, ra_alloc1(as, ir->op1, RSET_GPR),
+	       (int32_t)offsetof(GCfuncL, uvptr) + 8*(int32_t)(ir->op2 >> 8));
     }
   }
 }
