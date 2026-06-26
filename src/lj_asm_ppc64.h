@@ -1076,36 +1076,41 @@ static void asm_ahustore(ASMState *as, IRIns *ir)
   if (ir->r == RID_SINK)
     return;
   if (!LJ_SOFTFP && irt_isnum(ir->t)) {
+    /* A number is stored as the raw 64-bit double. May fuse an indexed ref. */
     src = ra_alloc1(as, ir->op2, RSET_FPR);
-  } else {
-    if (!irt_ispri(ir->t)) {
-      src = ra_alloc1(as, ir->op2, allow);
-      rset_clear(allow, src);
-      ofs = 0;
-    }
-    if (LJ_SOFTFP && (ir+1)->o == IR_HIOP)
-      type = ra_alloc1(as, (ir+1)->op2, allow);
-    else
-      type = ra_allock(as, (int32_t)irt_toitype(ir->t), allow);
-    rset_clear(allow, type);
-  }
-  idx = asm_fuseahuref(as, ir->op1, &ofs, allow);
-  if (!LJ_SOFTFP && irt_isnum(ir->t)) {
+    idx = asm_fuseahuref(as, ir->op1, &ofs, allow);
     if (ofs == AHUREF_LSX) {
       emit_fab(as, PPCI_STFDX, src, (idx&255), RID_TMP);
       emit_slwi(as, RID_TMP, (idx>>8), 3);
     } else {
       emit_fai(as, PPCI_STFD, src, idx, ofs);
     }
-  } else {
-    if (ra_hasreg(src))
-      emit_tai(as, PPCI_STW, src, idx, ofs+4);
-    if (ofs == AHUREF_LSX) {
-      emit_tab(as, PPCI_STWX, type, (idx&255), RID_TMP);
-      emit_slwi(as, RID_TMP, (idx>>8), 3);
-    } else {
-      emit_tai(as, PPCI_STW, type, idx, ofs);
-    }
+    return;
+  }
+  /* GC64: store int/addr/pri as a single 64-bit tagged TValue via STD.
+  ** Non-num refs force ofs=0, so asm_fuseahuref never returns the indexed
+  ** (AHUREF_LSX) form here -- addressing is always base+ofs.
+  */
+  ofs = 0;
+  if (!irref_isk(ir->op2)) {
+    src = ra_alloc1(as, ir->op2, allow);
+    rset_clear(allow, src);
+    type = ra_allock(as, (int64_t)irt_toitype(ir->t) << 47, allow);
+    rset_clear(allow, type);
+  }
+  idx = asm_fuseahuref(as, ir->op1, &ofs, allow);
+  if (irref_isk(ir->op2)) {  /* Constant (incl. primitives): store k.u64. */
+    TValue k;
+    lj_ir_kvalue(as->J->L, &k, IR(ir->op2));
+    emit_tai(as, PPCI_STD, ra_allock(as, (intptr_t)k.u64, rset_exclude(allow, idx)),
+	     idx, ofs);
+  } else if (irt_isinteger(ir->t)) {  /* (LJ_TISNUM<<47) | (uint32)value. */
+    emit_tai(as, PPCI_STD, RID_TMP, idx, ofs);
+    emit_tab(as, PPCI_ADD, RID_TMP, RID_TMP, type);
+    emit_rotdi(as, PPCI_RLDICL, RID_TMP, src, 0, 32);  /* clrldi: zero-extend. */
+  } else {  /* Address: (itype<<47) | gcptr. */
+    emit_tai(as, PPCI_STD, RID_TMP, idx, ofs);
+    emit_tab(as, PPCI_ADD, RID_TMP, src, type);
   }
 }
 
