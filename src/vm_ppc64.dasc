@@ -554,11 +554,7 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |->vm_unwind_ff:			// Unwind C stack, return from ff pcall.
   |  // (void *cframe)
-  |.if GPR64
   |  rldicr sp, CARG1, 0, 61
-  |.else
-  |  rlwinm sp, CARG1, 0, 0, 29
-  |.endif
   |->vm_unwind_ff_eh:			// Landing pad for external unwinder.
   |  lp L, SAVE_L
   |  .toc ld TOCREG, SAVE_TOC
@@ -731,22 +727,14 @@ static void build_subroutines(BuildCtx *ctx)
   |   sub TMP0, TMP0, TMP1		// Compute -savestack(L, L->top).
   |    lp TMP1, L->cframe
   |     addi DISPATCH, DISPATCH, GG_G2DISP
-  |.if P64
   |  mr r12, CARG4		// ELFv2: r12 = entry for callee global entry.
-  |.else
-  |  .toc lp CARG4, 0(CARG4)
-  |.endif
   |  li TMP2, 0
   |   stw TMP0, SAVE_NRES		// Neg. delta means cframe w/o frame.
   |  stw TMP2, SAVE_ERRF		// No error function.
   |    stp TMP1, SAVE_CFRAME
   |    stp sp, L->cframe		// Add our C frame to cframe chain.
   |     stp L, DISPATCH_GL(cur_L)(DISPATCH)
-  |.if P64
   |  mtctr r12
-  |.else
-  |  mtctr CARG4
-  |.endif
   |  bctrl			// (lua_State *L, lua_CFunction func, void *ud)
   |  mr. BASE, CRET1
   |   li PC, FRAME_CP
@@ -1959,11 +1947,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  extsw CARG2, TMP1			// exp; ppc64 ABI: FP arg (f1) skips r3, int arg is r4=CARG2.
   |.else
   |.ffunc_nn math_ldexp
-  |.if GPR64
   |  toint CARG2, FARG2
-  |.else
-  |  toint CARG1, FARG2
-  |.endif
   |.endif
   |  blex ldexp
   |  b ->fff_resn
@@ -2413,21 +2397,13 @@ static void build_subroutines(BuildCtx *ctx)
   |    addi TMP0, TMP1, 8*LUA_MINSTACK
   |     lp TMP2, L->maxstack
   |   stp PC, SAVE_PC			// Redundant (but a defined value).
-  |.if P64
   |  mr r12, TMP3		// ELFv2: r12 = entry.
-  |.else
-  |  .toc lp TMP3, 0(TMP3)
-  |.endif
   |  cmplw TMP0, TMP2
   |     stp BASE, L->base
   |    stp TMP1, L->top
   |   mr CARG1, L
   |  bgt >5				// Need to grow stack.
-  |.if P64
   |  mtctr r12
-  |.else
-  |  mtctr TMP3
-  |.endif
   |  bctrl				// (lua_State *L)
   |  // Either throws an error, or recovers and returns -1, 0 or nresults+1.
   |  lp BASE, L->base
