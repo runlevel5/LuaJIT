@@ -2081,9 +2081,12 @@ static void asm_intcomp_(ASMState *as, IRRef lref, IRRef rref, Reg cr, PPCCC cc)
     if ((cc & CC_UNSIGNED) == 0) {  /* Signed comparison with constant. */
       if (checki16(k)) {
 	emit_tai(as, PPCI_CMPWI, cr, left, k);
-	/* Signed comparison with zero and referencing previous ins? */
-	if (k == 0 && lref == as->curins-1)
-	  as->flagmcp = as->mcp;  /* Allow elimination of the compare. */
+	/* NB: on ppc64 we must NOT eliminate this 32-bit cmpwi via the dot-form
+	** of the preceding op: add./addi./etc. record the full 64-bit result, so
+	** for a 32-bit int op whose result overflows into bit 31 (e.g. tobit
+	** i+0x7fffffff) the recorded sign (bit 63) differs from the int32 sign
+	** (bit 31) -> wrong "< 0". The dot-form fusion (flagmcp) is only valid for
+	** 64-bit ops, where it is kept in asm_intcomp64_ (cmpdi). */
 	return;
       } else if ((cc & 3) == (CC_EQ & 3)) {  /* Use CMPLWI for EQ or NE. */
 	if (checku16(k)) {
