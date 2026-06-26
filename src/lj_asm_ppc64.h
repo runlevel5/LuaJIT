@@ -870,10 +870,19 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
 	emit_rotdi(as, PPCI_RLDICL, tmp2, tkey, 32, 32);  /* hi32 of tkey. */
 	emit_rotdi(as, PPCI_RLDICL, tmp1, tkey, 0, 32);   /* lo32 of tkey. */
       } else {
-	emit_asb(as, PPCI_XOR, tmp2, key, tmp1);
-	emit_rotlwi(as, dest, tmp1, HASH_ROT1);
-	emit_tai(as, PPCI_ADDI, tmp1, tmp2, HASH_BIAS);
-	emit_tai(as, PPCI_ADDIS, tmp2, key, (HASH_BIAS + 32768)>>16);
+	/* GC64: hashgcref(t, key->gcr) hashes the FULL tagged key value (gcr holds
+	** (itype<<47)|ptr). So lo = ptr&0xffffffff, hi = (itype<<15)|(ptr>>32).
+	** Compute from `key` (the masked pointer, available early -- using tkey
+	** here would read it stale, as tkey is built after this hash). The first
+	** hashrot step (lo^=hi) is folded into the XOR, mirroring the num path. The
+	** pre-GC64 lo=key,hi=key+HASH_BIAS formula sent some GC keys to the wrong
+	** bucket -> present keys not found in the chain. */
+	Reg ithi = ra_allock(as, (int32_t)(irt_toitype(kt) << 15), allow);
+	emit_asb(as, PPCI_XOR, tmp2, tmp2, tmp1);     /* tmp2 = lo ^ hi. */
+	emit_rotlwi(as, dest, tmp1, HASH_ROT1);       /* dest = rol(hi, R1). */
+	emit_tab(as, PPCI_ADD, tmp1, tmp1, ithi);     /* hi = (ptr>>32)|itype<<15. */
+	emit_rotdi(as, PPCI_RLDICL, tmp1, key, 32, 32); /* tmp1 = ptr>>32. */
+	emit_rotdi(as, PPCI_RLDICL, tmp2, key, 0, 32);  /* tmp2 = lo = ptr&0xffffffff. */
       }
     }
   }
