@@ -70,6 +70,11 @@ static void emit_sldi(ASMState *as, Reg ra, Reg rs, int32_t n)
   emit_rotdi(as, PPCI_RLDICR, ra, rs, n, 63-n);  /* sldi = rldicr ra,rs,n,63-n */
 }
 
+static void emit_srdi(ASMState *as, Reg ra, Reg rs, int32_t n)
+{
+  emit_rotdi(as, PPCI_RLDICL, ra, rs, (64-n)&63, n);  /* srdi=rldicl ra,rs,64-n,n */
+}
+
 /* sradi rA,rS,sh: arithmetic shift right doubleword immediate (XS-form). */
 static void emit_sradi(ASMState *as, Reg ra, Reg rs, int32_t sh)
 {

@@ -319,6 +319,10 @@ typedef enum PPCIns {
   PPCI_RLDCL = 0x78000010,
   PPCI_RLDCR = 0x78000012,
 
+  PPCI_SLD = 0x7c000036,	/* Variable 64-bit shift-left doubleword. */
+  PPCI_SRD = 0x7c000436,	/* Variable 64-bit shift-right doubleword. */
+  PPCI_SRAD = 0x7c000634,	/* Variable 64-bit arith. shift-right dword. */
+
   PPCI_MTVSRD = 0x7c000166,
   PPCI_MFVSRD = 0x7c000066,
   PPCI_FCFID = 0xfc00069c,

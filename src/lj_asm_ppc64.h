@@ -199,6 +199,17 @@ static Reg asm_fuseahuref(ASMState *as, IRRef ref, int32_t *ofsp, RegSet allow)
   return ra_alloc1(as, ref, allow);
 }
 
+/* Convert a D/DS-form load/store opcode to its X-form (indexed) equivalent.
+** The (pi>>20)&0x780 bit-trick only works for the 32-bit D-form opcodes; the
+** 64-bit DS-form LD/STD have a different primary opcode and must be mapped
+** explicitly (otherwise STD would mis-encode as stfiwx). */
+static PPCIns asm_loadstorex(PPCIns pi)
+{
+  if (pi == PPCI_LD) return PPCI_LDX;
+  if (pi == PPCI_STD) return PPCI_STDX;
+  return PPCI_LWZX | ((pi >> 20) & 0x780);
+}
+
 /* Fuse XLOAD/XSTORE reference into load/store operand. */
 static void asm_fusexref(ASMState *as, PPCIns pi, Reg rt, IRRef ref,
 			 RegSet allow, int32_t ofs)
@@ -215,7 +226,7 @@ static void asm_fusexref(ASMState *as, PPCIns pi, Reg rt, IRRef ref,
       } else if (ofs == 0) {
 	Reg right, left = ra_alloc2(as, ir, allow);
 	right = (left >> 8); left &= 255;
-	emit_fab(as, PPCI_LWZX | ((pi >> 20) & 0x780), rt, left, right);
+	emit_fab(as, asm_loadstorex(pi), rt, left, right);
 	return;
       }
     } else if (ir->o == IR_STRREF) {
@@ -239,7 +250,7 @@ static void asm_fusexref(ASMState *as, PPCIns pi, Reg rt, IRRef ref,
       if (!checki16(ofs)) {
 	Reg left = ra_alloc1(as, ref, allow);
 	Reg right = ra_allock(as, ofs, rset_exclude(allow, left));
-	emit_fab(as, PPCI_LWZX | ((pi >> 20) & 0x780), rt, left, right);
+	emit_fab(as, asm_loadstorex(pi), rt, left, right);
 	return;
       }
     }
@@ -495,14 +506,11 @@ static void asm_tobit(ASMState *as, IRIns *ir)
 static void asm_conv(ASMState *as, IRIns *ir)
 {
   IRType st = (IRType)(ir->op2 & IRCONV_SRCMASK);
+  int st64 = (st == IRT_I64 || st == IRT_U64 || st == IRT_P64);
 #if !LJ_SOFTFP
   int stfp = (st == IRT_NUM || st == IRT_FLOAT);
 #endif
   IRRef lref = ir->op1;
-  /* 64 bit integer conversions are handled by SPLIT. */
-  lj_assertA(!(irt_isint64(ir->t) || (st == IRT_I64 || st == IRT_U64)),
-	     "IR %04d has unsplit 64 bit type",
-	     (int)(ir - as->ir) - REF_BIAS);
 #if LJ_SOFTFP
   /* FP conversions are handled by SPLIT. */
   lj_assertA(!irt_isfp(ir->t) && !(st == IRT_NUM || st == IRT_FLOAT),
@@ -518,6 +526,16 @@ static void asm_conv(ASMState *as, IRIns *ir)
 	emit_fb(as, PPCI_FRSP, dest, ra_alloc1(as, lref, RSET_FPR));
       else  /* float -> double conversion is a no-op on PPC. */
 	ra_leftov(as, dest, lref);  /* Do nothing, but may need to move regs. */
+    } else if (st == IRT_I64 || st == IRT_U64) {
+      /* int64/uint64 -> FP conversion via FCFID (move to FPR, convert). */
+      /* NYI: full unsigned correction for u64 >= 2^63 (rare in practice). */
+      Reg left = ra_alloc1(as, lref, RSET_GPR);
+      Reg tmp = ra_scratch(as, rset_exclude(RSET_FPR, dest));
+      /* Emitted in reverse, so execution order is: STD; LFD; FCFID; [FRSP]. */
+      if (irt_isfloat(ir->t)) emit_fb(as, PPCI_FRSP, dest, dest);
+      emit_fb(as, PPCI_FCFID, dest, tmp);
+      emit_fai(as, PPCI_LFD, tmp, RID_SP, SPOFS_TMP);
+      emit_tai(as, PPCI_STD, left, RID_SP, SPOFS_TMP);
     } else {  /* Integer to FP conversion. */
       /* IRT_INT: Flip hibit, bias with 2^52, subtract 2^52+2^31. */
       /* IRT_U32: Bias with 2^52, subtract 2^52. */
@@ -542,6 +560,13 @@ static void asm_conv(ASMState *as, IRIns *ir)
       lj_assertA(irt_isint(ir->t) && st == IRT_NUM,
 		 "bad type for checked CONV");
       asm_tointg(as, ir, ra_alloc1(as, lref, RSET_FPR));
+    } else if (irt_is64(ir->t)) {  /* FP -> int64/uint64 conversion (FCTIDZ). */
+      Reg dest = ra_dest(as, ir, RSET_GPR);
+      Reg left = ra_alloc1(as, lref, RSET_FPR);
+      Reg tmp = ra_scratch(as, rset_exclude(RSET_FPR, left));
+      emit_tai(as, PPCI_LD, dest, RID_SP, SPOFS_TMP);
+      emit_fai(as, PPCI_STFD, tmp, RID_SP, SPOFS_TMP);
+      emit_fb(as, PPCI_FCTIDZ, tmp, left);
     } else {
       Reg dest = ra_dest(as, ir, RSET_GPR);
       Reg left = ra_alloc1(as, lref, RSET_FPR);
@@ -562,9 +587,27 @@ static void asm_conv(ASMState *as, IRIns *ir)
 	emit_as(as, st == IRT_I8 ? PPCI_EXTSB : PPCI_EXTSH, dest, left);
       else
 	emit_rot(as, PPCI_RLWINM, dest, left, 0, st == IRT_U8 ? 24 : 16, 31);
-    } else {  /* 32/64 bit integer conversions. */
-      /* Only need to handle 32/32 bit no-op (cast) on 32 bit archs. */
-      ra_leftov(as, dest, lref);  /* Do nothing, but may need to move regs. */
+    } else if (irt_is64(ir->t)) {  /* Conversion to 64 bit integer. */
+      if (st64 || !(ir->op2 & IRCONV_SEXT)) {
+	/* 64/64 bit no-op (cast) or 32 to 64 bit zero extension. */
+	Reg left = ra_alloc1(as, lref, RSET_GPR);
+	if (st64) {
+	  ra_leftov(as, dest, lref);  /* Cast: may need to move regs. */
+	} else {  /* 32 to 64 bit zero extension: clear the upper 32 bits. */
+	  emit_rotdi(as, PPCI_RLDICL, dest, left, 0, 32);  /* clrldi rd,rs,32 */
+	}
+      } else {  /* 32 to 64 bit sign extension. */
+	Reg left = ra_alloc1(as, lref, RSET_GPR);
+	emit_as(as, PPCI_EXTSW, dest, left);
+      }
+    } else {  /* Conversion to 32 bit integer. */
+      if (st64) {
+	/* Truncate a 64 bit integer to 32 bits (keep low word). */
+	Reg left = ra_alloc1(as, lref, RSET_GPR);
+	emit_rotdi(as, PPCI_RLDICL, dest, left, 0, 32);  /* clrldi rd,rs,32 */
+      } else {  /* 32/32 bit no-op (cast). */
+	ra_leftov(as, dest, lref);  /* Do nothing, but may need to move regs. */
+      }
     }
   }
 }
@@ -1286,17 +1329,9 @@ static void asm_cnew(ASMState *as, IRIns *ir)
     RegSet allow = (RSET_GPR & ~RSET_SCRATCH);
     int32_t ofs = sizeof(GCcdata);
     lj_assertA(sz == 4 || sz == 8, "bad CNEWI size %d", sz);
-    if (sz == 8) {
-      ofs += 4;
-      lj_assertA((ir+1)->o == IR_HIOP, "expected HIOP for CNEWI");
-    }
-    for (;;) {
-      Reg r = ra_alloc1(as, ir->op2, allow);
-      emit_tai(as, PPCI_STW, r, RID_RET, ofs);
-      rset_clear(allow, r);
-      if (ofs == sizeof(GCcdata)) break;
-      ofs -= 4; ir++;
-    }
+    /* GC64/LJ_64: the value is a single 32- or 64-bit register (no HIOP). */
+    Reg r = ra_alloc1(as, ir->op2, allow);
+    emit_tai(as, sz == 8 ? PPCI_STD : PPCI_STW, r, RID_RET, ofs);
   } else if (ir->op2 != REF_NIL) {  /* Create VLA/VLS/aligned cdata. */
     ci = &lj_ir_callinfo[IRCALL_lj_cdata_newv];
     args[0] = ASMREF_L;     /* lua_State *L */
@@ -1679,6 +1714,29 @@ static void asm_bswap(ASMState *as, IRIns *ir)
 {
   Reg dest = ra_dest(as, ir, RSET_GPR);
   IRIns *irx;
+  if (irt_is64(ir->t)) {
+    /* 64-bit byte-reverse: reverse each 32-bit half, then swap halves.
+    ** dest = bswap32(hi) | (bswap32(lo) << 32), where lo = low 32 bits. */
+    Reg left = ra_alloc1(as, ir->op1, RSET_GPR);
+    Reg tmp = ra_scratch(as, rset_exclude(rset_exclude(RSET_GPR, dest), left));
+    Reg tmp2 = ra_scratch(as, rset_exclude(rset_exclude(rset_exclude(
+		 RSET_GPR, dest), left), tmp));
+    /* Final: dest = rldimi(tmp2_reversed_lo<<32 into dest holding reversed-hi) */
+    /* Build reversed low half into tmp (from left's low 32), reversed high half
+    ** into dest (from left's high 32), then dest = (tmp<<32) | dest. */
+    /* dest = dest | (tmp<<32): use rldimi dest, tmp, 32, 0. */
+    emit_rotdi(as, PPCI_RLDIMI, dest, tmp, 32, 0);
+    /* Reverse high 32 of `left` into dest (low 32 of dest). */
+    emit_rot(as, PPCI_RLWIMI, dest, tmp2, 24, 16, 23);
+    emit_rot(as, PPCI_RLWIMI, dest, tmp2, 24, 0, 7);
+    emit_rotlwi(as, dest, tmp2, 8);
+    emit_rotdi(as, PPCI_RLDICL, tmp2, left, 32, 32);  /* tmp2 = left >> 32. */
+    /* Reverse low 32 of `left` into tmp. */
+    emit_rot(as, PPCI_RLWIMI, tmp, left, 24, 16, 23);
+    emit_rot(as, PPCI_RLWIMI, tmp, left, 24, 0, 7);
+    emit_rotlwi(as, tmp, left, 8);
+    return;
+  }
   if (mayfuse(as, ir->op1) && (irx = IR(ir->op1))->o == IR_XLOAD &&
       ra_noreg(irx->r) && (irt_isint(irx->t) || irt_isu32(irx->t))) {
     /* Fuse BSWAP with XLOAD to lwbrx. */
@@ -1738,9 +1796,13 @@ static void asm_band(ASMState *as, IRIns *ir)
     dot = PPCF_DOT;
   }
   dest = ra_dest(as, ir, RSET_GPR);
-  if (irref_isk(ir->op2)) {
-    int32_t k = IR(ir->op2)->i;
-    if (k) {
+  /* The RLWINM-mask fusion and ANDIS paths are 32-bit only (they zero the
+  ** upper 32 bits), so for 64-bit BAND only andi. with a u16 mask (high bits
+  ** known 0) is safe; everything else goes reg-reg via a materialized const. */
+  if (irref_isk(ir->op2) &&
+      !(irt_is64(ir->t) && !checku16(get_kval(as, ir->op2)))) {
+    int32_t k = (int32_t)get_kval(as, ir->op2);
+    if (k && !irt_is64(ir->t)) {
       /* First check for a contiguous bitmask as used by rlwinm. */
       uint32_t s1 = lj_ffs((uint32_t)k);
       uint32_t k1 = ((uint32_t)k >> s1);
@@ -1765,7 +1827,7 @@ static void asm_band(ASMState *as, IRIns *ir)
       left = ra_alloc1(as, lref, RSET_GPR);
       emit_asi(as, PPCI_ANDIDOT, dest, left, k);
       return;
-    } else if ((k & 0xffff) == 0) {
+    } else if ((k & 0xffff) == 0 && !irt_is64(ir->t)) {
       left = ra_alloc1(as, lref, RSET_GPR);
       emit_asi(as, PPCI_ANDISDOT, dest, left, (k >> 16));
       return;
@@ -1785,8 +1847,13 @@ static void asm_bitop(ASMState *as, IRIns *ir, PPCIns pi, PPCIns pik)
 {
   Reg dest = ra_dest(as, ir, RSET_GPR);
   Reg right, left = ra_hintalloc(as, ir->op1, dest, RSET_GPR);
-  if (irref_isk(ir->op2)) {
-    int32_t k = IR(ir->op2)->i;
+  /* For 64-bit bitops, only the 16-bit zero-extended immediate forms (andi./
+  ** ori/xori) are safe; any wider constant (incl. high-word bits) must go
+  ** through a materialized register, else the ORIS/32-bit paths corrupt the
+  ** upper 32 bits. */
+  if (irref_isk(ir->op2) &&
+      !(irt_is64(ir->t) && !checku16(get_kval(as, ir->op2)))) {
+    int32_t k = (int32_t)get_kval(as, ir->op2);
     Reg tmp = left;
     if ((checku16(k) || (k & 0xffff) == 0) || (tmp = dest, !as->sectref)) {
       if (!checku16(k)) {
@@ -1821,6 +1888,26 @@ static void asm_bitshift(ASMState *as, IRIns *ir, PPCIns pi, PPCIns pik)
   }
   dest = ra_dest(as, ir, RSET_GPR);
   left = ra_alloc1(as, ir->op1, RSET_GPR);
+  if (irt_is64(ir->t)) {  /* 64-bit shifts (GC64/FFI i64/u64). */
+    /* pik selects the operation: 0=shl, 1=shr, SRAWI=>sar, RLWINM=>rol. */
+    if (irref_isk(ir->op2)) {  /* Constant 64-bit shift. */
+      int32_t shift = (IR(ir->op2)->i & 63);
+      if (pik == 0)  /* sldi = rldicr rd,rs,shift,63-shift */
+	emit_rotdi(as, PPCI_RLDICR|dot, dest, left, shift, 63-shift);
+      else if (pik == 1)  /* srdi = rldicl rd,rs,64-shift,shift */
+	emit_rotdi(as, PPCI_RLDICL|dot, dest, left, (64-shift)&63, shift);
+      else if (pik == PPCI_SRAWI)  /* sradi */
+	emit_sradi(as, dest, left, shift);
+      else  /* rotate left (rldicl rd,rs,shift,0) */
+	emit_rotdi(as, PPCI_RLDICL|dot, dest, left, shift, 0);
+    } else {
+      Reg right = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, left));
+      PPCIns pi64 = pik == 0 ? PPCI_SLD : pik == 1 ? PPCI_SRD :
+		    pik == PPCI_SRAWI ? PPCI_SRAD : PPCI_RLDCL;
+      emit_asb(as, pi64|dot, dest, left, right);
+    }
+    return;
+  }
   if (irref_isk(ir->op2)) {  /* Constant shifts. */
     int32_t shift = (IR(ir->op2)->i & 31);
     if (pik == 0)  /* SLWI */
@@ -1927,6 +2014,34 @@ static const uint8_t asm_compmap[IR_ABC+1] = {
   /* ABC */ CC_LE + CC_UNSIGNED + (CC_LT<<4) + CC_TWO  /* Same as UGT. */
 };
 
+/* 64-bit integer comparison (GC64/FFI i64/u64). */
+static void asm_intcomp64_(ASMState *as, IRRef lref, IRRef rref, Reg cr,
+			   PPCCC cc)
+{
+  Reg right, left = ra_alloc1(as, lref, RSET_GPR);
+  if (irref_isk(rref)) {
+    intptr_t k = get_kval(as, rref);
+    if ((cc & CC_UNSIGNED) == 0) {  /* Signed comparison with constant. */
+      if (checki16(k)) {
+	emit_tai(as, PPCI_CMPDI, cr, left, (int32_t)k);
+	if (k == 0 && lref == as->curins-1)
+	  as->flagmcp = as->mcp;
+	return;
+      } else if ((cc & 3) == (CC_EQ & 3) && checku16(k)) {
+	emit_tai(as, PPCI_CMPLDI, cr, left, (int32_t)k);
+	return;
+      }
+    } else {  /* Unsigned comparison with constant. */
+      if (checku16(k)) {
+	emit_tai(as, PPCI_CMPLDI, cr, left, (int32_t)k);
+	return;
+      }
+    }
+  }
+  right = ra_alloc1(as, rref, rset_exclude(RSET_GPR, left));
+  emit_tab(as, (cc & CC_UNSIGNED) ? PPCI_CMPLD : PPCI_CMPD, cr, left, right);
+}
+
 static void asm_intcomp_(ASMState *as, IRRef lref, IRRef rref, Reg cr, PPCCC cc)
 {
   Reg right, left = ra_alloc1(as, lref, RSET_GPR);
@@ -1989,7 +2104,10 @@ static void asm_comp(ASMState *as, IRIns *ir)
       if ((cc & 2) == 0) cc ^= 1;  /* LT <-> GT, LE <-> GE */
     }
     asm_guardcc(as, cc);
-    asm_intcomp_(as, lref, rref, 0, cc);
+    if (irt_is64(ir->t))  /* GC64/FFI native 64-bit integer comparison. */
+      asm_intcomp64_(as, lref, rref, 0, cc);
+    else
+      asm_intcomp_(as, lref, rref, 0, cc);
   }
 }
 
