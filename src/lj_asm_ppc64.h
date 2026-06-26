@@ -401,9 +401,13 @@ static void asm_retf(ASMState *as, IRIns *ir)
   emit_setgl(as, base, jit_base);
   emit_addptr(as, base, -8*delta);
   asm_guardcc(as, CC_NE);
-  emit_ab(as, PPCI_CMPW, RID_TMP,
-	  ra_allock(as, i32ptr(pc), rset_exclude(RSET_GPR, base)));
-  emit_tai(as, PPCI_LWZ, RID_TMP, base, -8);
+  /* GC64: the saved frame PC at base-8 is a full 64-bit pointer. A 32-bit load
+  ** + compare reads the high word on BE (vs. the low-word i32ptr(pc)) and
+  ** spuriously fails the RETF guard -> endless side traces. Use a 64-bit
+  ** load + compare against the full pointer (cf. arm64). */
+  emit_ab(as, PPCI_CMPD, RID_TMP,
+	  ra_allock(as, i64ptr(pc), rset_exclude(RSET_GPR, base)));
+  emit_tai(as, PPCI_LD, RID_TMP, base, -8);
 }
 
 /* -- Buffer operations --------------------------------------------------- */
@@ -1169,10 +1173,12 @@ dotypecheck:
   if (irt_isnum(t)) {
     if ((ir->op2 & IRSLOAD_TYPECHECK)) {
       /* Number type check: load the full TValue, extract the high 32 bits
-      ** (= itype<<15) and compare against TISNUMhi. number iff itype<=LJ_TISNUM,
-      ** i.e. (high>>... ) <= TISNUMhi. Exit (not a number) on CC_LT. */
+      ** (= itype<<15) and compare against TISNUMhi. A pure double has
+      ** itype < LJ_TISNUM (an integer has itype == LJ_TISNUM, which must NOT
+      ** pass a num SLOAD). So exit (not a pure double) when TISNUMhi <= hi,
+      ** i.e. CC_LE on `cmplw TISNUMhi, hi` (cf arm64 CC_LS). */
       Reg tisnumhi = ra_allock(as, (int32_t)(LJ_TISNUM << 15), allow);
-      asm_guardcc(as, CC_LT);
+      asm_guardcc(as, CC_LE);
       emit_ab(as, PPCI_CMPLW, tisnumhi, RID_TMP);
       emit_rotdi(as, PPCI_RLDICL, RID_TMP, RID_TMP, 32, 32);  /* srdi 32. */
       emit_tai(as, PPCI_LD, RID_TMP, base, ofs);
