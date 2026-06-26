@@ -1,4 +1,6 @@
-|// Low-level VM code for PowerPC 32 bit or 32on64 bit mode.
+|// Low-level VM code for the OpenPOWER platform (PPC64, ELFv2 ABI).
+|// Targets POWER8 / ISA 2.07 and later, little-endian (ppc64le) and
+|// big-endian, in GC64 mode.
 |// Bytecode interpreter, fast functions and helper functions.
 |// Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 |
@@ -15,17 +17,16 @@
 |
 |//-----------------------------------------------------------------------
 |
-|// DynASM defines used by the PPC port:
+|// DynASM defines used by the OpenPOWER (PPC64 ELFv2) port:
 |//
-|// P64     64 bit pointers (only for GPR64 testing).
-|// GPR64   64 bit registers (but possibly 32 bit pointers, e.g. PS3).
+|// P64     64 bit operation: 64 bit pointers, ld/std for loads/stores.
+|//         Always set for this port; the !P64 paths are legacy 32 bit.
+|// GPR64   64 bit general-purpose registers.
 |//         Affects reg saves, stack layout, carry/overflow/dot flags etc.
-|// FRAME32 Use 32 bit frame layout, even with GPR64 (Xbox 360).
-|// TOC     Need table of contents (64 bit or 32 bit variant, e.g. PS3).
-|//         Function pointers are really a struct: code, TOC, env (optional).
-|// TOCENV  Function pointers have an environment pointer, too (not on PS3).
-|// PPE     Power Processor Element of Cell (PS3) or Xenon (Xbox 360).
-|//         Must avoid (slow) micro-coded instructions.
+|// TOC     ELFv2 table of contents (GOT), addressed via r2.
+|// TOCENV  Vestigial: ELFv2 uses a global entry point (r12), not function
+|//         descriptors. Kept only for the shared call macros.
+|// (The legacy FRAME32 define from the old console ports is unused.)
 |
 |.if P64
 |.define GPR64, 1	// PPC64 ELFv2 (ppc64le): 64 bit GPRs and pointers.
@@ -76,35 +77,16 @@
 |.macro .gpr64, a, b; .if GPR64; a, b; .endif; .endmacro
 |
 |.macro andix., y, a, i
-|.if PPE
-|  rlwinm y, a, 0, 31-lj_fls(i), 31-lj_ffs(i)
-|  cmpwi y, 0
-|.else
 |  andi. y, a, i
-|.endif
 |.endmacro
 |
 |.macro clrso, reg
-|.if PPE
-|  li reg, 0
-|  mtxer reg
-|.else
 |  mcrxr cr0
-|.endif
 |.endmacro
 |
 |.macro checkov, reg, noov
-|.if PPE
-|  mfxer reg
-|  add reg, reg, reg
-|  cmpwi reg, 0
-|   li reg, 0
-|   mtxer reg
-|  bgey noov
-|.else
 |  mcrxr cr0
 |  bley noov
-|.endif
 |.endmacro
 |
 |//-----------------------------------------------------------------------
@@ -348,11 +330,9 @@
 |.endif
 |  rest_ 14; rest_ 15; rest_ 16; rest_ 17; rest_ 18; rest_ 19
 |  mtlr r0;
-|.if PPE; mtocrf 0x20, r12; .else; mtcrf 0x38, r12; .endif
+|  mtcrf 0x38, r12
 |  rest_ 20; rest_ 21; rest_ 22; rest_ 23; rest_ 24; rest_ 25
-|.if PPE; mtocrf 0x10, r12; .endif
 |  rest_ 26; rest_ 27; rest_ 28; rest_ 29; rest_ 30; rest_ 31
-|.if PPE; mtocrf 0x08, r12; .endif
 |  addi sp, sp, CFRAME_SPACE
 |.endmacro
 |
@@ -890,12 +870,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  mtctr CARG4
   |.endif
   |  bctrl			// (lua_State *L, lua_CFunction func, void *ud)
-  |.if PPE
-  |  mr BASE, CRET1
-  |  cmpwi CRET1, 0
-  |.else
   |  mr. BASE, CRET1
-  |.endif
   |   li PC, FRAME_CP
   |  bne <3				// Else continue with the call.
   |  b ->vm_leave_cp			// No base? Just remove C frame.
@@ -5054,12 +5029,7 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  sub RC, RC, TMP0			// RC = vbase
     |  // Note: RC may now be even _above_ BASE if nargs was < numparams.
     |  cmplwi cr1, RB, 0
-    |.if PPE
-    |   sub TMP1, TMP3, RC
-    |   cmpwi TMP1, 0
-    |.else
     |   sub. TMP1, TMP3, RC
-    |.endif
     |  beq cr1, >5			// Copy all varargs?
     |   subi TMP2, TMP2, 16
     |   ble >2				// No vararg slots?
