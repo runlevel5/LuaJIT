@@ -5478,11 +5478,7 @@ static void emit_asm_debug(BuildCtx *ctx)
 	"\t.long .LEFDE1-.LASFDE1\n"
 	".LASFDE1:\n"
 	"\t.long .Lframe0\n"
-#if LJ_TARGET_PS3
-	"\t.long .lj_vm_ffi_call\n"
-#else
 	"\t.long lj_vm_ffi_call\n"
-#endif
 	"\t.long %d\n"
 	"\t.byte 0x11\n\t.uleb128 65\n\t.sleb128 -1\n"
 	"\t.byte 0x8e\n\t.uleb128 2\n"
