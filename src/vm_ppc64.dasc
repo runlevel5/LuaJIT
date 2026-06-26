@@ -136,34 +136,36 @@
 |.define ENVREG,	r11	// Environment pointer (nested C functions).
 |
 |// Stack layout while in interpreter. Must match with lj_frame.h.
-|// GC64/ELFv2 frame map (CFRAME_SPACE=512):
+|// GC64/ELFv2 frame map (CFRAME_SPACE=640):
 |//   0      back-chain
 |//   8      SAVE_CR
 |//   16     LR-save slot written by a trace->C callee (ABI)
 |//   24     trace TOC-save (emit_call), ABI TOC-save doubleword
 |//   32..39 TMPD / 24..31 TONUM: interp FP<->int scratch (transient)
 |//   40     SAVE_TOC (interp; transient)
-|//   32..95 ELFv2 callee PARAMETER-SAVE AREA (a trace->C callee may spill its
-|//          register args here -- must hold NO state live across the call)
-|//   96..107 SPOFS_TMP/SPOFS_TMPW: trace FP<->int scratch (transient)
-|//   112..175 TRACE SPILL window (16 slots; sps_scale maps here) -- above the
+|//   32..95 ELFv2 PARAM-SAVE AREA slots 0..7 (register-arg shadows; a trace->C
+|//          callee may spill its r3..r10 args here -- NO state live across call)
+|//   96..223 ELFv2 PARAM-SAVE AREA slots 8..23 (16 overflow stack-arg slots for
+|//          trace->C calls with >8 integer args; 9th arg at sp+96)
+|//   224..235 SPOFS_TMP/SPOFS_TMPW: trace FP<->int scratch (transient)
+|//   240..303 TRACE SPILL window (16 slots; sps_scale maps here) -- above the
 |//          param area so cross-call spills survive, below the reg saves
-|//   176..319 GPR saves (18*8)
-|//   320..463 FPR saves (18*8)
-|//   464..511 C-frame info (LIVE across a trace exit): kept HIGH so it can never
+|//   304..447 GPR saves (18*8)
+|//   448..591 FPR saves (18*8)
+|//   592..639 C-frame info (LIVE across a trace exit): kept HIGH so it can never
 |//          alias the trace spill / param-save zone (the down-recursion bug).
-|//   512+16 SAVE_LR (caller's LR slot)
-|.define SAVE_MULTRES,	504(sp) // \ 32 bit C frame info.
-|.define SAVE_ERRF,	500(sp) // |
-|.define SAVE_NRES,	496(sp) // /
-|.define SAVE_L,	488(sp) // \ 64 bit lua_State *.
-|.define SAVE_PC,	480(sp) // | 64 bit PC / sentinel.
-|.define SAVE_CFRAME,	472(sp) // / 64 bit C frame chain.
-|.define SAVE_LR,	528(sp)
-|.define CFRAME_SPACE,	512     // Delta for sp.
-|// Back chain for sp:	512(sp) <-- sp entering interpreter
-|.define SAVE_FPR_,	320     // .. 320+18*8: 64 bit FPR saves.
-|.define SAVE_GPR_,	176     // .. 176+18*8: 64 bit GPR saves.
+|//   640+16 SAVE_LR (caller's LR slot)
+|.define SAVE_MULTRES,	632(sp) // \ 32 bit C frame info.
+|.define SAVE_ERRF,	628(sp) // |
+|.define SAVE_NRES,	624(sp) // /
+|.define SAVE_L,	616(sp) // \ 64 bit lua_State *.
+|.define SAVE_PC,	608(sp) // | 64 bit PC / sentinel.
+|.define SAVE_CFRAME,	600(sp) // / 64 bit C frame chain.
+|.define SAVE_LR,	656(sp)
+|.define CFRAME_SPACE,	640     // Delta for sp.
+|// Back chain for sp:	640(sp) <-- sp entering interpreter
+|.define SAVE_FPR_,	448     // .. 448+18*8: 64 bit FPR saves.
+|.define SAVE_GPR_,	304     // .. 304+18*8: 64 bit GPR saves.
 |.define SAVE_TOC,	40(sp)  // TOC save area (interp; transient).
 |.if ENDIAN_LE
 |.define TMPD_LO,	32(sp)  // \ GC64/LE: low word at the lower address.
@@ -2921,7 +2923,10 @@ static void build_subroutines(BuildCtx *ctx)
   |  mr r14, TMP2
   |  la TMP1, CCSTATE->stack
   |   blt >2				// No stack arguments?
-  |  la TMP2, 32(sp)			// ELFv2 parameter save area.
+  |  // ELFv2 param save area is at sp+32; the first 8 doublewords correspond to
+  |  // the args already passed in r3..r10, so overflow args (cc->stack[]) start
+  |  // at the 9th doubleword: sp + 32 + 8*8 = sp+96.
+  |  la TMP2, 32+8*8(sp)			// ELFv2 parameter save area (slot 8+).
   |1:  // Copy stack arguments.
   |  ldx TMP0, TMP1, CARG2
   |  stdx TMP0, TMP2, CARG2
@@ -5147,13 +5152,13 @@ static void emit_asm_debug(BuildCtx *ctx)
 	"\t.long %d\n"
 	"\t.byte 0xe\n\t.uleb128 %d\n"
 	"\t.byte 0x11\n\t.uleb128 65\n\t.sleb128 -2\n"
-	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 63\n",  /* CR (reg70) @ CFA-63*8 = sp+8; CFA=sp+512. */
+	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 79\n",  /* CR (reg70) @ CFA-79*8 = sp+8; CFA=sp+640. */
 	fcofs, CFRAME_SIZE);
     for (i = 14; i <= 31; i++)
       fprintf(ctx->fp,
 	"\t.byte %d\n\t.uleb128 %d\n"
 	"\t.byte %d\n\t.uleb128 %d\n",
-	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+176+), FPR@CFA-(38-i)*8 (sp+320+); CFA=sp+512. */
+	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+304+), FPR@CFA-(38-i)*8 (sp+448+); CFA=sp+640. */
     fprintf(ctx->fp,
 	"\t.align 2\n"
 	".LEFDE0:\n\n");
@@ -5200,13 +5205,13 @@ static void emit_asm_debug(BuildCtx *ctx)
 	"\t.uleb128 0\n"			/* augmentation length */
 	"\t.byte 0xe\n\t.uleb128 %d\n"
 	"\t.byte 0x11\n\t.uleb128 65\n\t.sleb128 -2\n"
-	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 63\n",  /* CR (reg70) @ CFA-63*8 = sp+8; CFA=sp+512. */
+	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 79\n",  /* CR (reg70) @ CFA-79*8 = sp+8; CFA=sp+640. */
 	fcofs, CFRAME_SIZE);
     for (i = 14; i <= 31; i++)
       fprintf(ctx->fp,
 	"\t.byte %d\n\t.uleb128 %d\n"
 	"\t.byte %d\n\t.uleb128 %d\n",
-	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+176+), FPR@CFA-(38-i)*8 (sp+320+); CFA=sp+512. */
+	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+304+), FPR@CFA-(38-i)*8 (sp+448+); CFA=sp+640. */
     fprintf(ctx->fp,
 	"\t.align 2\n"
 	".LEFDE2:\n\n");

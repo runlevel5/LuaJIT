@@ -87,12 +87,17 @@ enum {
 **   [sp+  8] CR save          \ ABI linkage doublewords -- a C callee invoked
 **   [sp+ 16] LR save          | from the trace writes the LR (and maybe CR)
 **   [sp+ 24] TOC save         / here; emit_call uses the TOC slot.
-**   [sp+ 32 .. 95] ELFv2 param save area: a callee may spill its register args
-**                  here, and outgoing stack args live here. Holds NO live state.
-**   [sp+ 96 ..107] SPOFS_TMP/SPOFS_TMPW FP<->int scratch (transient).
-**   [sp+112 ..175] general spill slots: sps_scale(slot)=4*slot, SPS_FIRST=28
-**                  -> slot 28 at sp+112. 16 fixed slots (28..43), then grow.
-**   [sp+176 ..]   GPR/FPR reg saves, then the C-frame info (LIVE, kept HIGH).
+**   [sp+ 32 .. 95] ELFv2 param save area, doublewords 0..7: the register-shadow
+**                  slots for args passed in r3..r10. A callee may spill its
+**                  register args here. Holds NO live state.
+**   [sp+ 96 ..223] ELFv2 param save area, doublewords 8..23 (16 slots): outgoing
+**                  STACK args for a trace->C call with >8 integer args go here
+**                  (the 9th arg at sp+96, matching what the C callee reads). The
+**                  recorder caps traced C-calls at PPC_MAX_PARAM_SLOTS args.
+**   [sp+224 ..235] SPOFS_TMP/SPOFS_TMPW FP<->int scratch (transient).
+**   [sp+240 ..303] general spill slots: sps_scale(slot)=4*slot, SPS_FIRST=60
+**                  -> slot 60 at sp+240. 16 fixed slots (60..75), then grow.
+**   [sp+304 ..]   GPR/FPR reg saves, then the C-frame info (LIVE, kept HIGH).
 ** The spill window sits ABOVE the linkage+param area (so cross-C-call spills
 ** survive -- a spill at sp+16 would be overwritten by the callee's LR save) and
 ** BELOW the reg saves + the interp C-frame info (so it never aliases SAVE_L --
@@ -101,18 +106,22 @@ enum {
 ** SPS_FIXED: fixed spill slots pre-reserved in the interp frame (no growth).
 ** SPS_FIRST: first spill slot for general use.
 */
-#define SPS_FIXED	43
-#define SPS_FIRST	28
+#define SPS_FIXED	75
+#define SPS_FIRST	60
 
 /* Stack offsets for temporary slots, above the ELFv2 param save area so they
-** survive trace->C calls. The TMP slot is an 8-byte double at sp+96. */
-#define SPOFS_TMPW	104
-#define SPOFS_TMP	96
-#define SPOFS_TMPHI	(LJ_BE ? 96 : 100)
-#define SPOFS_TMPLO	(LJ_BE ? 100 : 96)
+** survive trace->C calls. The TMP slot is an 8-byte double at sp+224. */
+#define SPOFS_TMPW	232
+#define SPOFS_TMP	224
+#define SPOFS_TMPHI	(LJ_BE ? 224 : 228)
+#define SPOFS_TMPLO	(LJ_BE ? 228 : 224)
 
-/* ELFv2 outgoing parameter save area (for trace->C calls with >8 args). */
+/* ELFv2 outgoing parameter save area (for trace->C calls). Doublewords 0..7
+** (sp+32..95) shadow the register args; doublewords 8.. (sp+96..) hold overflow
+** stack args. PPC_MAX_PARAM_SLOTS bounds the total scalar args a traced C-call
+** may have (8 reg-shadow + 16 overflow = 24); the recorder aborts beyond that. */
 #define PPC_SPOFS_PARAM	32
+#define PPC_MAX_PARAM_SLOTS	24
 
 #define sps_scale(slot)		(4 * (int32_t)(slot))
 #define sps_align(slot)		(((slot) - SPS_FIXED + 3) & ~3)

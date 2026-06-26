@@ -304,14 +304,24 @@ static int asm_fusemadd(ASMState *as, IRIns *ir, PPCIns pi, PPCIns pir)
 static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 {
   uint32_t n, nargs = CCI_XNARGS(ci);
-  /* ELFv2: outgoing stack args go in the param save area at sp+32+, each taking
-  ** a full 8-byte doubleword (the param area and the GPR/FPR register files
-  ** advance in lockstep -- consecutive-doubleword ABI). */
+  /* ELFv2 consecutive-doubleword ABI: the parameter save area at sp+32 has one
+  ** 8-byte doubleword per scalar argument, and the GPR/FPR register files +
+  ** param area advance in LOCKSTEP. The first 8 integer/pointer args go in
+  ** r3..r10 (their param-area doublewords are register shadows we don't write);
+  ** any further arg (9th+) is stored into its own doubleword. So `ofs` must
+  ** track the per-arg doubleword position for EVERY arg, not only stack args --
+  ** an overflow arg then lands at sp+32 + 8*arg_index (e.g. the 9th arg at
+  ** sp+32+64 = sp+96), matching vm_ffi_call and the callee's expectations. */
   int32_t ofs = PPC_SPOFS_PARAM;
   Reg gpr = REGARG_FIRSTGPR;
 #if !LJ_SOFTFP
   Reg fpr = REGARG_FIRSTFPR;
 #endif
+  /* The trace frame reserves only PPC_MAX_PARAM_SLOTS doublewords of ELFv2
+  ** param-save area; bail to the interpreter (which grows its own frame) for a
+  ** C-call with more scalar args than will fit. */
+  if (nargs > PPC_MAX_PARAM_SLOTS)
+    lj_trace_err(as->J, LJ_TRERR_NYICALL);
   if ((void *)ci->func)
     emit_call(as, (void *)ci->func);
   for (n = 0; n < nargs; n++) {  /* Setup args. */
@@ -325,12 +335,11 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 		     "reg %d not free", fpr);  /* Already evicted. */
 	  ra_leftov(as, fpr, ref);
 	  fpr++;
-	  if (gpr <= REGARG_LASTGPR) gpr++; else ofs += 8;  /* Skip param slot. */
+	  if (gpr <= REGARG_LASTGPR) gpr++;  /* FP arg also consumes a GPR slot. */
 	} else {
 	  Reg r = ra_alloc1(as, ref, RSET_FPR);
 	  emit_fai(as, irt_isnum(ir->t) ? PPCI_STFD : PPCI_STFS, r, RID_SP,
 		   ofs + (irt_isnum(ir->t) || LJ_LE ? 0 : 4));
-	  ofs += 8;
 	}
       } else
 #endif
@@ -344,15 +353,13 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 	  Reg r = ra_alloc1(as, ref, RSET_GPR);
 	  emit_tai(as, irt_is64(ir->t) ? PPCI_STD : PPCI_STW, r, RID_SP,
 		   ofs + (irt_is64(ir->t) || LJ_LE ? 0 : 4));
-	  ofs += 8;
 	}
       }
     } else {
       if (gpr <= REGARG_LASTGPR)
 	gpr++;
-      else
-	ofs += 8;
     }
+    ofs += 8;  /* Every scalar arg consumes one param-area doubleword. */
     checkmclim(as);
   }
 }
