@@ -1509,8 +1509,35 @@ static void asm_arithov(ASMState *as, IRIns *ir, PPCIns pi)
   dest = ra_dest(as, ir, RSET_GPR);
   left = ra_alloc2(as, ir, RSET_GPR);
   right = (left >> 8); left &= 255;
-  if (pi == PPCI_SUBFO) { Reg tmp = left; left = right; right = tmp; }
-  emit_tab(as, pi|PPCF_DOT, dest, left, right);
+  if (pi == PPCI_MULLWO) {
+    /* mullwo. is a 32x32->32 multiply whose OV/SO already reflect 32-bit
+    ** overflow, so the plain dot-form suffices. */
+    if (pi == PPCI_SUBFO) { Reg tmp = left; left = right; right = tmp; }
+    emit_tab(as, pi|PPCF_DOT, dest, left, right);
+    return;
+  }
+  /* GC64: addo./subo. are 64-bit ops -- their OV/SO only catch a 64-bit
+  ** overflow, not the 32-bit Lua integer overflow we must guard. Detect 32-bit
+  ** overflow like the interpreter's addo32./subo32. macros: shift both operands
+  ** left 32 and run the flag-setting op on the shifted values ((a<<32) +/-
+  ** (b<<32) overflows 64-bit iff a +/- b overflows 32-bit), with the real
+  ** 32-bit result from a separate plain add/subf. Emitted in reverse:
+  ** sldi t0,sl,32; sldi RID_TMP,sr,32; <flag>o. RID_TMP,t0,RID_TMP; <guard>;
+  ** add/subf dest,sl,sr. */
+  {
+    int sub = (pi == PPCI_SUBFO);
+    Reg sl = left, sr = right;
+    Reg t0;
+    if (sub) { Reg tmp = sl; sl = sr; sr = tmp; }  /* subf: result = right-left. */
+    t0 = ra_scratch(as, rset_exclude(rset_exclude(rset_exclude(RSET_GPR,
+		    dest), sl), sr));
+    /* Real 32-bit result. */
+    emit_tab(as, sub ? PPCI_SUBF : PPCI_ADD, dest, sl, sr);
+    /* Flag op on the <<32 operands -> CR0[SO] reflects 32-bit overflow. */
+    emit_tab(as, (sub ? PPCI_SUBFO : PPCI_ADDO)|PPCF_DOT, RID_TMP, t0, RID_TMP);
+    emit_rotdi(as, PPCI_RLDICR, RID_TMP, sr, 32, 31);  /* sr << 32. */
+    emit_rotdi(as, PPCI_RLDICR, t0, sl, 32, 31);       /* sl << 32. */
+  }
 }
 
 #define asm_addov(as, ir)	asm_arithov(as, ir, PPCI_ADDO)
