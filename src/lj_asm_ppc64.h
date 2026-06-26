@@ -584,6 +584,8 @@ static void asm_strto(ASMState *as, IRIns *ir)
 /* -- Memory references --------------------------------------------------- */
 
 /* Get pointer to TValue. */
+static void asm_tvstore64(ASMState *as, Reg base, int32_t ofs, IRRef ref);
+
 static void asm_tvptr(ASMState *as, Reg dest, IRRef ref, MSize mode)
 {
   int32_t tmpofs = (int32_t)(offsetof(global_State, tmptv)-32768);
@@ -617,18 +619,9 @@ static void asm_tvptr(ASMState *as, Reg dest, IRRef ref, MSize mode)
 #endif
       }
     } else {
-      /* Otherwise use g->tmptv to hold the TValue. */
-      Reg type;
+      /* GC64: store a single 64-bit tagged TValue into g->tmptv. */
       emit_tai(as, PPCI_ADDI, dest, RID_JGL, tmpofs);
-      if (!irt_ispri(ir->t)) {
-	Reg src = ra_alloc1(as, ref, RSET_GPR);
-	emit_setgl(as, src, tmptv.gcr);
-      }
-      if (LJ_SOFTFP && (ir+1)->o == IR_HIOP && !irt_isnil((ir+1)->t))
-	type = ra_alloc1(as, ref+1, RSET_GPR);
-      else
-	type = ra_allock(as, irt_toitype(ir->t), RSET_GPR);
-      emit_setgl_u32(as, type, tmptv.it);
+      asm_tvstore64(as, RID_JGL, tmpofs, ref);
     }
   } else {
     emit_tai(as, PPCI_ADDI, dest, RID_JGL, tmpofs);
