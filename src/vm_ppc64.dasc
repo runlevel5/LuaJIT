@@ -28,20 +28,13 @@
 |//         descriptors. Kept only for the shared call macros.
 |// (The legacy FRAME32 define from the old console ports is unused.)
 |
-|.if P64
-|.define GPR64, 1	// PPC64 ELFv2 (ppc64le): 64 bit GPRs and pointers.
+|.define GPR64, 1	// PPC64 ELFv2: 64 bit GPRs and pointers.
 |.define TOC, 1
 |.define TOCENV, 1
 |.macro lpx, a, b, c; ldx a, b, c; .endmacro
 |.macro lp, a, b; ld a, b; .endmacro
 |.macro stp, a, b; std a, b; .endmacro
 |.define decode_OPP, decode_OP8
-|.else
-|.macro lpx, a, b, c; lwzx a, b, c; .endmacro
-|.macro lp, a, b; lwz a, b; .endmacro
-|.macro stp, a, b; stw a, b; .endmacro
-|.define decode_OPP, decode_OP4
-|.endif
 |
 |// Endianness: byte offset of the low/high 32-bit word within a 64-bit slot,
 |// and of the opcode byte within a 32-bit bytecode instruction.
@@ -56,25 +49,15 @@
 |.endif
 |
 |// Convenience macros for TOC handling.
-|.if TOC
 |// ELFv2: plain bl + nop. The linker patches the nop to `ld r2, SAVE_TOC`
 |// (TOC restore) for cross-module calls and inserts a PLT stub as needed.
 |.macro blex, target; bl extern target; nop; .endmacro
 |.macro .toc, a, b; a, b; .endmacro
-|.if P64
 |.define TOC_OFS,	 8
 |.define ENV_OFS,	16
-|.else
-|.define TOC_OFS,	4
-|.define ENV_OFS,	8
-|.endif
-|.else  // No TOC.
-|.macro blex, target; bl extern target@plt; .endmacro
-|.macro .toc, a, b; .endmacro
-|.endif
-|.macro .tocenv, a, b; .if TOCENV; a, b; .endif; .endmacro
+|.macro .tocenv, a, b; a, b; .endmacro
 |
-|.macro .gpr64, a, b; .if GPR64; a, b; .endif; .endmacro
+|.macro .gpr64, a, b; a, b; .endmacro
 |
 |.macro andix., y, a, i
 |  andi. y, a, i
