@@ -158,14 +158,18 @@ static Reg ra_allock(ASMState *as, intptr_t k, RegSet allow);
 /* Get/set from constant pointer. */
 static void emit_lsptr(ASMState *as, PPCIns pi, Reg r, void *p, RegSet allow)
 {
-  int32_t jgl = i32ptr(J2G(as->J));
-  int32_t i = i32ptr(p);
+  uintptr_t pp = (uintptr_t)p;
+  uintptr_t jgl = (uintptr_t)J2G(as->J);
+  int32_t i;
   Reg base;
-  if ((uint32_t)(i-jgl) < 65536) {
-    i = i-jgl-32768;
+  if ((uintptr_t)(pp-jgl) < 65536) {  /* Within reach of the JGL anchor. */
+    i = (int32_t)(pp-jgl-32768);
     base = RID_JGL;
   } else {
-    base = ra_allock(as, i-(int16_t)i, allow);
+    /* GC64: materialize the full 64-bit base; keep the signed 16-bit displacement
+    ** in the load itself (base holds p with the low 16 bits cleared/aligned). */
+    i = (int16_t)(int32_t)pp;
+    base = ra_allock(as, (intptr_t)(pp - (uintptr_t)(intptr_t)i), allow);
   }
   emit_tai(as, pi, r, base, i);
 }
