@@ -224,24 +224,27 @@ static void emit_jmp(ASMState *as, MCode *target)
   *p = PPCI_B | (delta & 0x03fffffcu);
 }
 
+/* ELFv2 TOC save slot in the current (interpreter) stack frame. The trace runs
+** on the interpreter's frame; 24(r1) is the ABI-reserved TOC-save doubleword and
+** is not used by trace mcode (FP bounces use SPOFS_TMP=8). */
+#define PPC_TOC_SAVE_OFS	24
+
 static void emit_call(ASMState *as, void *target)
 {
-  MCode *p = --as->mcp;
-  ptrdiff_t delta = (char *)target - (char *)p;
-  if ((((delta>>2) + 0x00800000) >> 24) == 0) {
-    *p = PPCI_BL | (delta & 0x03fffffcu);
-  } else {
-    /* Target out of BL range (common on the BE host, where trace mcode is far
-    ** from libluajit): indirect call via the ELFv2 global entry. The address
-    ** MUST be in r12 so the callee's global-entry prologue recomputes r2 from
-    ** r12; r2 (RID_SYS1, reserved) already holds this module's TOC, so the same
-    ** value is restored. Materialize the FULL 64-bit address (i32ptr truncated
-    ** it -> wild call). */
-    *p = PPCI_BCTRL;
-    p[-1] = PPCI_MTCTR | PPCF_T(RID_R12);
-    as->mcp = p-1;
-    ra_allockreg(as, i64ptr(target), RID_R12);
-  }
+  /* ELFv2 trace->C calls go indirect via r12 (the callee's global entry
+  ** recomputes its own r2/TOC from r12). The target may live in another module
+  ** (e.g. libm floor), whose TOC differs from ours, and the ELFv2 callee does
+  ** NOT restore the caller's r2 -- so we must save/restore r2 (RID_SYS1 = our
+  ** reserved TOC) around the call ourselves. A plain in-range `bl` would reach
+  ** the callee's LOCAL entry assuming r2 is already its TOC, which is only true
+  ** for same-module calls and cannot be linker-patched in runtime mcode; so use
+  ** the indirect global-entry path unconditionally.
+  ** Emitted in reverse: r12-load; std r2; mtctr r12; bctrl; ld r2. */
+  emit_tai(as, PPCI_LD, RID_SYS1, RID_SP, PPC_TOC_SAVE_OFS);  /* restore r2. */
+  *--as->mcp = PPCI_BCTRL;
+  *--as->mcp = PPCI_MTCTR | PPCF_T(RID_R12);
+  emit_tai(as, PPCI_STD, RID_SYS1, RID_SP, PPC_TOC_SAVE_OFS);  /* save r2. */
+  ra_allockreg(as, i64ptr(target), RID_R12);
 }
 
 /* -- Emit generic operations --------------------------------------------- */
