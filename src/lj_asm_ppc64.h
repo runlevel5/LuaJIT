@@ -1919,18 +1919,15 @@ static void asm_comp(ASMState *as, IRIns *ir)
       emit_tab(as, PPCI_CROR, ((cc>>4)&3), ((cc>>4)&3), (CC_EQ&3));
     emit_fab(as, PPCI_FCMPU, 0, left, right);
   } else if (irt_isaddr(ir->t)) {
-    /* GC64: EQ/NE of 64-bit GCobj references (e.g. function-identity guard).
-    ** The constant operand is a KGC, not a KINT, so compare full pointers.
-    */
+    /* GC64: EQ/NE of 64-bit GCobj references (function-identity guard, the
+    ** `tab NE NULL` metatable check, etc.). Compare full 64-bit pointers. Use
+    ** ra_alloc1 for the RHS even when it's a constant: it remats KGC/KPTR/KKPTR/
+    ** KNULL correctly (a NULL operand is a KPTR/KNULL, NOT a KGC -- ir_kgc would
+    ** read a garbage gcr field and the guard would mis-compare). */
     Reg right, left = ra_alloc1(as, ir->op1, RSET_GPR);
     IRRef rref = ir->op2;
     asm_guardcc(as, cc);
-    if (irref_isk(rref)) {
-      right = ra_allock(as, (intptr_t)ir_kgc(IR(rref)),
-			rset_exclude(RSET_GPR, left));
-    } else {
-      right = ra_alloc1(as, rref, rset_exclude(RSET_GPR, left));
-    }
+    right = ra_alloc1(as, rref, rset_exclude(RSET_GPR, left));
     emit_tab(as, (cc & CC_UNSIGNED) ? PPCI_CMPLD : PPCI_CMPD, 0, left, right);
   } else {
     IRRef lref = ir->op1, rref = ir->op2;
