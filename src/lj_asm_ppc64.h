@@ -1014,30 +1014,57 @@ static void asm_ahuvload(ASMState *as, IRIns *ir)
     ofs = ofs != AHUREF_LSX ? ofs + 8 * ir->op2 :
 	  ir->op2 ? 8 * ir->op2 : AHUREF_LSX;
   }
-  if (irt_isnum(t)) {
-    Reg tisnum = ra_allock(as, (int32_t)LJ_TISNUM, rset_exclude(allow, idx));
-    asm_guardcc(as, CC_GE);
-    emit_ab(as, PPCI_CMPLW, type, tisnum);
-    if (ra_hasreg(dest)) {
-      if (!LJ_SOFTFP && ofs == AHUREF_LSX) {
-	tmp = ra_scratch(as, rset_exclude(rset_exclude(RSET_GPR,
-						       (idx&255)), (idx>>8)));
-	emit_fab(as, PPCI_LFDX, dest, (idx&255), tmp);
-      } else {
-	emit_fai(as, LJ_SOFTFP ? PPCI_LWZ : PPCI_LFD, dest, idx,
-		 ofs+4*LJ_SOFTFP);
-      }
-    }
-  } else {
-    asm_guardcc(as, CC_NE);
-    emit_ai(as, PPCI_CMPWI, type, irt_toitype(t));
-    if (ra_hasreg(dest)) emit_tai(as, PPCI_LWZ, dest, idx, ofs+4);
-  }
+  /* GC64: load the full 64-bit TValue, extract the itype from the high bits and
+  ** load the value half. The LSX-fused case computes idx*8 into tmp first. */
   if (ofs == AHUREF_LSX) {
-    emit_tab(as, PPCI_LWZX, type, (idx&255), tmp);
+    tmp = ra_scratch(as, rset_exclude(rset_exclude(RSET_GPR,
+						   (idx&255)), (idx>>8)));
+  }
+  if (irt_isnum(t)) {
+    /* Pure double: itype < LJ_TISNUM. Exit (CC_LE) when TISNUMhi <= hi. */
+    Reg tisnumhi = ra_allock(as, (int32_t)(LJ_TISNUM << 15),
+			     rset_exclude(allow, idx));
+    asm_guardcc(as, CC_LE);
+    emit_ab(as, PPCI_CMPLW, tisnumhi, type);
+    emit_rotdi(as, PPCI_RLDICL, type, type, 32, 32);  /* srdi 32: hi word. */
+    if (ra_hasreg(dest)) {
+      if (!LJ_SOFTFP && ofs == AHUREF_LSX)
+	emit_fab(as, PPCI_LFDX, dest, (idx&255), tmp);
+      else
+	emit_fai(as, PPCI_LFD, dest, idx, ofs);
+    }
+  } else if (irt_isint(t)) {
+    Reg tisnumhi = ra_allock(as, (int32_t)(LJ_TISNUM << 15),
+			     rset_exclude(allow, idx));
+    asm_guardcc(as, CC_NE);
+    emit_ab(as, PPCI_CMPLW, type, tisnumhi);
+    emit_rotdi(as, PPCI_RLDICL, type, type, 32, 32);  /* srdi 32: hi word. */
+    if (ra_hasreg(dest)) emit_tai(as, PPCI_LWZ, dest, idx, ofs+(LJ_BE?4:0));
+  } else {  /* Address: load full TValue once, derive itype, mask dest.
+	    ** Execution order: LD load; sradi RID_TMP,load,47; mask dest;
+	    ** cmpdi; guard. Emitted in reverse, so the mask (rldicl) must be
+	    ** emitted BEFORE the sradi here, and the sradi reads the unmasked
+	    ** value -- so use a distinct itype temp when load==dest. */
+    Reg load = ra_hasreg(dest) ? dest : type;
+    asm_guardcc(as, CC_NE);
+    emit_ai(as, PPCI_CMPDI, RID_TMP, irt_toitype(t));
+    if (ra_hasreg(dest))
+      emit_rotdi(as, PPCI_RLDICL, dest, dest, 0, 17);  /* GCVMASK (after sradi). */
+    emit_sradi(as, RID_TMP, load, 47);
+    if (ofs == AHUREF_LSX) {
+      emit_fab(as, PPCI_LDX, load, (idx&255), tmp);
+      emit_slwi(as, tmp, (idx>>8), 3);
+    } else {
+      emit_tai(as, PPCI_LD, load, idx, ofs);
+    }
+    return;
+  }
+  /* For num/int: load the full TValue into the type register for itype check. */
+  if (ofs == AHUREF_LSX) {
+    emit_fab(as, PPCI_LDX, type, (idx&255), tmp);
     emit_slwi(as, tmp, (idx>>8), 3);
   } else {
-    emit_tai(as, PPCI_LWZ, type, idx, ofs);
+    emit_tai(as, PPCI_LD, type, idx, ofs);
   }
 }
 
