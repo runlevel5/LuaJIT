@@ -90,11 +90,13 @@ enum {
 #define SPS_FIXED	7
 #define SPS_FIRST	4
 
-/* Stack offsets for temporary slots. Used for FP<->int conversions etc. */
+/* Stack offsets for temporary slots. Used for FP<->int conversions etc.
+** The TMP slot is an 8-byte double at sp+8; TMPLO/TMPHI are its low/high 32-bit
+** words. On LE the low word is at the lower address (sp+8), on BE at sp+12. */
 #define SPOFS_TMPW	4
 #define SPOFS_TMP	8
-#define SPOFS_TMPHI	8
-#define SPOFS_TMPLO	12
+#define SPOFS_TMPHI	(LJ_BE ? 8 : 12)
+#define SPOFS_TMPLO	(LJ_BE ? 12 : 8)
 
 #define sps_scale(slot)		(4 * (int32_t)(slot))
 #define sps_align(slot)		(((slot) - SPS_FIXED + 3) & ~3)
