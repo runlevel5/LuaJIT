@@ -2108,7 +2108,8 @@ static void asm_stack_check(ASMState *as, BCReg topslot,
     ra_modified(as, tmp);
   emit_ai(as, PPCI_CMPLWI, RID_TMP, (int32_t)(8*topslot));
   emit_tab(as, PPCI_SUBF, RID_TMP, pbase, tmp);
-  emit_tai(as, PPCI_LWZ, tmp, tmp, offsetof(lua_State, maxstack));
+  /* GC64: L->maxstack is a 64-bit TValue*; LWZ would truncate it. */
+  emit_tai(as, PPCI_LD, tmp, tmp, offsetof(lua_State, maxstack));
   if (pbase == RID_TMP)
     emit_getgl(as, RID_TMP, jit_base);
   emit_getgl(as, tmp, cur_L);
