@@ -2747,9 +2747,10 @@ static void build_subroutines(BuildCtx *ctx)
   |.if JIT
   |  // RA = resultptr, RB = meta base
   |  lwz INS, -4(PC)
-  |    lwz TRACE:TMP2, -20(RB)		// Save previous trace.
+  |    lp TRACE:TMP2, -40(RB)		// GC64/FR2: save previous trace (64-bit).
   |   addic. TMP1, MULTRES, -8
   |  decode_RA8 RC, INS			// Call base.
+  |    rldicl TRACE:TMP2, TRACE:TMP2, 0, 17	// GC64: mask off the itype.
   |   beq >2
   |1:  // Move results down.
   |.if FPU
