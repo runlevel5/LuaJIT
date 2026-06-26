@@ -2611,10 +2611,21 @@ static void build_subroutines(BuildCtx *ctx)
   |  andix. TMP0, TMP1, FRAME_TYPE
   |  bney >3				// Trace stitching continuation?
   |  // Otherwise set KBASE for Lua function below fast function.
+  |  // GC64/FR2: the frame below is a 2-slot frame; its function is a 64-bit
+  |  // GCRef at FRAME_FUNC (caller_base-16) and must be loaded with lp and masked
+  |  // (GCVMASK) -- the old `lwz ...,-12` read 32 bits at the wrong offset of the
+  |  // tagged func -> garbage LFUNC -> crash dereferencing LFUNC->pc (hit when a
+  |  // trace returns to the interp at a fast function, e.g. math.modf/frexp, with
+  |  // a Lua function in the frame below).
   |  lwz TMP2, -4(TMP1)
   |  decode_RA8 TMP0, TMP2
   |  sub TMP1, BASE, TMP0
-  |  lwz LFUNC:TMP2, -12(TMP1)
+  |  // GC64/FR2: the CALL'd fast func sits in a 2-slot frame, so the caller base
+  |  // is BASE - RA*8 - 16; its function is the 64-bit GCRef at FRAME_FUNC of the
+  |  // caller, i.e. (BASE - RA*8) - 16 - 16 = -32(TMP1). (FR1 used -12 for a
+  |  // 1-slot frame + 32-bit GCRef.)
+  |  lp LFUNC:TMP2, FRAME_FUNC-16(TMP1)
+  |  rldicl TMP2, TMP2, 0, 17		// GC64: mask off the itype.
   |  lp TMP1, LFUNC:TMP2->pc
   |  lp KBASE, PC2PROTO(k)(TMP1)
   |3:
