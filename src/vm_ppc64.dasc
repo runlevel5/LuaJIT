@@ -136,22 +136,35 @@
 |.define ENVREG,	r11	// Environment pointer (nested C functions).
 |
 |// Stack layout while in interpreter. Must match with lj_frame.h.
-|// GC64: keep the C frame info inside our own frame. Placing it in the C
-|// caller's parameter save area (above CFRAME_SPACE) overflows that area and
-|// corrupts the caller's locals. 48..112 is our (unused) param save area.
-|.define SAVE_MULTRES,	80(sp)  // \ 32 bit C frame info.
-|.define SAVE_ERRF,	76(sp)  // |
-|.define SAVE_NRES,	72(sp)  // /
-|.define SAVE_L,	64(sp)  // \ 64 bit lua_State *.
-|.define SAVE_PC,	56(sp)  // | 64 bit PC / sentinel.
-|.define SAVE_CFRAME,	48(sp)  // / 64 bit C frame chain.
-|.define SAVE_LR,	416(sp)
-|.define CFRAME_SPACE,	400     // Delta for sp.
-|// Back chain for sp:	400(sp) <-- sp entering interpreter
-|.define SAVE_FPR_,	256     // .. 256+18*8: 64 bit FPR saves.
-|.define SAVE_GPR_,	112     // .. 112+18*8: 64 bit GPR saves.
-|//			48(sp)  // Callee parameter save area (ABI mandated).
-|.define SAVE_TOC,	40(sp)  // TOC save area.
+|// GC64/ELFv2 frame map (CFRAME_SPACE=512):
+|//   0      back-chain
+|//   8      SAVE_CR
+|//   16     LR-save slot written by a trace->C callee (ABI)
+|//   24     trace TOC-save (emit_call), ABI TOC-save doubleword
+|//   32..39 TMPD / 24..31 TONUM: interp FP<->int scratch (transient)
+|//   40     SAVE_TOC (interp; transient)
+|//   32..95 ELFv2 callee PARAMETER-SAVE AREA (a trace->C callee may spill its
+|//          register args here -- must hold NO state live across the call)
+|//   96..107 SPOFS_TMP/SPOFS_TMPW: trace FP<->int scratch (transient)
+|//   112..175 TRACE SPILL window (16 slots; sps_scale maps here) -- above the
+|//          param area so cross-call spills survive, below the reg saves
+|//   176..319 GPR saves (18*8)
+|//   320..463 FPR saves (18*8)
+|//   464..511 C-frame info (LIVE across a trace exit): kept HIGH so it can never
+|//          alias the trace spill / param-save zone (the down-recursion bug).
+|//   512+16 SAVE_LR (caller's LR slot)
+|.define SAVE_MULTRES,	504(sp) // \ 32 bit C frame info.
+|.define SAVE_ERRF,	500(sp) // |
+|.define SAVE_NRES,	496(sp) // /
+|.define SAVE_L,	488(sp) // \ 64 bit lua_State *.
+|.define SAVE_PC,	480(sp) // | 64 bit PC / sentinel.
+|.define SAVE_CFRAME,	472(sp) // / 64 bit C frame chain.
+|.define SAVE_LR,	528(sp)
+|.define CFRAME_SPACE,	512     // Delta for sp.
+|// Back chain for sp:	512(sp) <-- sp entering interpreter
+|.define SAVE_FPR_,	320     // .. 320+18*8: 64 bit FPR saves.
+|.define SAVE_GPR_,	176     // .. 176+18*8: 64 bit GPR saves.
+|.define SAVE_TOC,	40(sp)  // TOC save area (interp; transient).
 |.if ENDIAN_LE
 |.define TMPD_LO,	32(sp)  // \ GC64/LE: low word at the lower address.
 |.define TMPD_HI,	36(sp)  // /
@@ -5129,13 +5142,13 @@ static void emit_asm_debug(BuildCtx *ctx)
 	"\t.long %d\n"
 	"\t.byte 0xe\n\t.uleb128 %d\n"
 	"\t.byte 0x11\n\t.uleb128 65\n\t.sleb128 -2\n"
-	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 49\n",
+	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 63\n",  /* CR (reg70) @ CFA-63*8 = sp+8; CFA=sp+512. */
 	fcofs, CFRAME_SIZE);
     for (i = 14; i <= 31; i++)
       fprintf(ctx->fp,
 	"\t.byte %d\n\t.uleb128 %d\n"
 	"\t.byte %d\n\t.uleb128 %d\n",
-	0x80+i, 50-i, 0x80+32+i, 32-i);
+	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+176+), FPR@CFA-(38-i)*8 (sp+320+); CFA=sp+512. */
     fprintf(ctx->fp,
 	"\t.align 2\n"
 	".LEFDE0:\n\n");
@@ -5182,13 +5195,13 @@ static void emit_asm_debug(BuildCtx *ctx)
 	"\t.uleb128 0\n"			/* augmentation length */
 	"\t.byte 0xe\n\t.uleb128 %d\n"
 	"\t.byte 0x11\n\t.uleb128 65\n\t.sleb128 -2\n"
-	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 49\n",
+	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 63\n",  /* CR (reg70) @ CFA-63*8 = sp+8; CFA=sp+512. */
 	fcofs, CFRAME_SIZE);
     for (i = 14; i <= 31; i++)
       fprintf(ctx->fp,
 	"\t.byte %d\n\t.uleb128 %d\n"
 	"\t.byte %d\n\t.uleb128 %d\n",
-	0x80+i, 50-i, 0x80+32+i, 32-i);
+	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+176+), FPR@CFA-(38-i)*8 (sp+320+); CFA=sp+512. */
     fprintf(ctx->fp,
 	"\t.align 2\n"
 	".LEFDE2:\n\n");

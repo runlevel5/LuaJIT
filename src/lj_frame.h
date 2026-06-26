@@ -222,15 +222,17 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK };  /* Special continuations. */
 #define CFRAME_SHIFT_MULTRES	3
 #elif LJ_64
 /* PPC64 ELFv2: GPR64 layout with 64-bit pointer saves, kept inside our own
-** frame. Must match the GPR64 stack layout in vm_ppc64.dasc.
+** frame. Must match the GPR64 stack layout in vm_ppc64.dasc. The C-frame info
+** lives HIGH (above the reg-save areas) so it never aliases the trace spill /
+** ELFv2 param-save zone (sp+32..175).
 */
-#define CFRAME_OFS_MULTRES	80
-#define CFRAME_OFS_ERRF		76
-#define CFRAME_OFS_NRES		72
-#define CFRAME_OFS_L		64
-#define CFRAME_OFS_PC		56
-#define CFRAME_OFS_PREV		48
-#define CFRAME_SIZE		400
+#define CFRAME_OFS_MULTRES	504
+#define CFRAME_OFS_ERRF		500
+#define CFRAME_OFS_NRES		496
+#define CFRAME_OFS_L		488
+#define CFRAME_OFS_PC		480
+#define CFRAME_OFS_PREV		472
+#define CFRAME_SIZE		512
 #define CFRAME_SHIFT_MULTRES	3
 #else
 #define CFRAME_OFS_ERRF		48

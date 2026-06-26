@@ -82,36 +82,36 @@ enum {
 /* Spill slots are 32 bit wide. An even/odd pair is used for FPRs.
 **
 ** ELFv2 trace stack frame (relative to the trace's sp; the trace runs in the
-** interpreter's CFRAME, grown by spadjust for spills):
+** interpreter's CFRAME -- see the frame map in vm_ppc64.dasc):
 **   [sp+  0] back-chain
-**   [sp+  8] CR save           \ ABI linkage doublewords -- a C callee invoked
-**   [sp+ 16] LR save           | from the trace WRITES the LR (and maybe CR)
-**   [sp+ 24] TOC save          / slots here (emit_call also uses the TOC slot),
-**   [sp+ 32 .. 95] param save area (8 doublewords; a callee may spill its
-**                  register args here, and outgoing stack args live here).
-**   [sp+ 96 .. 103] SPOFS_TMP scratch dword (FP<->int bounce).
-**   [sp+104 .. 107] SPOFS_TMPW.
-**   [sp+112 ..] general spill slots (sps_scale(SPS_FIRST=28)=112).
-** So the spill region and SPOFS scratch sit ABOVE the linkage+param area that
-** trace->C callees clobber -- this is essential (a spill at sp+16 would be
-** overwritten by the callee's LR save).
+**   [sp+  8] CR save          \ ABI linkage doublewords -- a C callee invoked
+**   [sp+ 16] LR save          | from the trace writes the LR (and maybe CR)
+**   [sp+ 24] TOC save         / here; emit_call uses the TOC slot.
+**   [sp+ 32 .. 95] ELFv2 param save area: a callee may spill its register args
+**                  here, and outgoing stack args live here. Holds NO live state.
+**   [sp+ 96 ..107] SPOFS_TMP/SPOFS_TMPW FP<->int scratch (transient).
+**   [sp+112 ..175] general spill slots: sps_scale(slot)=4*slot, SPS_FIRST=28
+**                  -> slot 28 at sp+112. 16 fixed slots (28..43), then grow.
+**   [sp+176 ..]   GPR/FPR reg saves, then the C-frame info (LIVE, kept HIGH).
+** The spill window sits ABOVE the linkage+param area (so cross-C-call spills
+** survive -- a spill at sp+16 would be overwritten by the callee's LR save) and
+** BELOW the reg saves + the interp C-frame info (so it never aliases SAVE_L --
+** the down-recursion / seal_globals crash).
 **
-** SPS_FIXED: Available fixed spill slots in interpreter frame.
-** SPS_FIRST: First spill slot for general use.
+** SPS_FIXED: fixed spill slots pre-reserved in the interp frame (no growth).
+** SPS_FIRST: first spill slot for general use.
 */
-#define SPS_FIXED	27
+#define SPS_FIXED	43
 #define SPS_FIRST	28
 
-/* Stack offsets for temporary slots, above the ELFv2 linkage+param area so they
+/* Stack offsets for temporary slots, above the ELFv2 param save area so they
 ** survive trace->C calls. The TMP slot is an 8-byte double at sp+96. */
 #define SPOFS_TMPW	104
 #define SPOFS_TMP	96
 #define SPOFS_TMPHI	(LJ_BE ? 96 : 100)
 #define SPOFS_TMPLO	(LJ_BE ? 100 : 96)
 
-/* ELFv2 outgoing parameter save area (for trace->C calls with >8 args).
-** NOTE: only safe once the trace frame is grown so sp+32 is fresh; all current
-** IRCALL targets are <=8-arg so no stack args are emitted. */
+/* ELFv2 outgoing parameter save area (for trace->C calls with >8 args). */
 #define PPC_SPOFS_PARAM	32
 
 #define sps_scale(slot)		(4 * (int32_t)(slot))
