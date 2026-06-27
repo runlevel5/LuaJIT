@@ -4040,50 +4040,33 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 
   case BC_TGETV:
     |  // RA = dst*8, RB = table*8, RC = key*8
-    |  lwzux CARG1, RB, BASE
-    |  lwzux CARG2, RC, BASE
-    |   lwz TAB:RB, 4(RB)
-    |.if DUALNUM
-    |   lwz RC, 4(RC)
-    |.else
-    |   lfd f0, 0(RC)
-    |.endif
-    |  checktab CARG1
-    |   checknum cr1, CARG2
+    |  ldx CARG1, BASE, RB		// GC64: table TValue.
+    |  ldx CARG2, BASE, RC		// GC64: key TValue.
+    |  checktab CARG1			// Masks CARG1 -> GCtab ptr.
+    |   sradi ITYPE, CARG2, 47		// Key itype.
     |  bne ->vmeta_tgetv
-    |.if DUALNUM
-    |  lwz TMP0, TAB:RB->asize
-    |   bne cr1, >5
-    |   lwz TMP1, TAB:RB->array
-    |  cmplw TMP0, RC
-    |   slwi TMP2, RC, 3
-    |.else
-    |   bge cr1, >5
-    |  // Convert number key to integer, check for integerness and range.
-    |  fctiwz f1, f0
-    |    fadd f2, f0, TOBIT
-    |  stfd f1, TMPD
+    |  mr TAB:RB, CARG1
+    |  // Only integer keys are handled in the array part inline (DUALNUM);
+    |  // string keys go to the hash path, everything else (incl. non-integer
+    |  // numbers) falls back to the metamethod handler. Mirrors arm64.
+    |  cmpdi ITYPE, LJ_TISNUM		// Integer key?
     |   lwz TMP0, TAB:RB->asize
-    |    fsub f2, f2, TOBIT
-    |  lwz TMP2, TMPD_LO
-    |   lwz TMP1, TAB:RB->array
-    |    fcmpu cr1, f0, f2
-    |  cmplw cr0, TMP0, TMP2
-    |  crand 4*cr0+gt, 4*cr0+gt, 4*cr1+eq
-    |   slwi TMP2, TMP2, 3
-    |.endif
+    |  bne >5
+    |  extsw TMP2, CARG2		// Integer key value (sign-extend low 32).
+    |   lp TMP1, TAB:RB->array
+    |  cmplw TMP0, TMP2		// Unsigned: also catches negative key.
+    |   slwi TMP3, TMP2, 3
     |  ble ->vmeta_tgetv		// Integer key and in array part?
-    |  lwzx TMP0, TMP1, TMP2
-    |   lfdx f14, TMP1, TMP2
-    |  checknil TMP0; beq >2
+    |  ldx TMP0, TMP1, TMP3		// GC64: array[key] TValue.
+    |  cmpd TMP0, TISNIL; beq >2
     |1:
     |  ins_next1
-    |   stfdx f14, BASE, RA
+    |   stdx TMP0, BASE, RA
     |  ins_next2
     |
     |2:  // Check for __index if table value is nil.
-    |  lwz TAB:TMP2, TAB:RB->metatable
-    |  cmplwi TAB:TMP2, 0
+    |  lp TAB:TMP2, TAB:RB->metatable
+    |  cmpdi TAB:TMP2, 0
     |  beq <1				// No metatable: done.
     |  lbz TMP0, TAB:TMP2->nomm
     |  andix. TMP0, TMP0, 1<<MM_index
@@ -4091,11 +4074,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  b ->vmeta_tgetv
     |
     |5:
-    |  checkstr CARG2; bne ->vmeta_tgetv
-    |.if not DUALNUM
-    |  lwz STR:RC, 4(RC)
-    |.endif
-    |  b ->BC_TGETS_Z			// String key?
+    |  cmpdi ITYPE, LJ_TSTR; bne ->vmeta_tgetv	// String key?
+    |  rldicl STR:RC, CARG2, 0, 17	// GC64: mask key TValue -> GCstr ptr.
+    |  b ->BC_TGETS_Z
     break;
   case BC_TGETS:
     |  // RA = dst*8, RB = table*8, RC = str_const*8 (~)
@@ -4191,43 +4172,26 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 
   case BC_TSETV:
     |  // RA = src*8, RB = table*8, RC = key*8
-    |  lwzux CARG1, RB, BASE
-    |  lwzux CARG2, RC, BASE
-    |   lwz TAB:RB, 4(RB)
-    |.if DUALNUM
-    |   lwz RC, 4(RC)
-    |.else
-    |   lfd f0, 0(RC)
-    |.endif
-    |  checktab CARG1
-    |   checknum cr1, CARG2
+    |  ldx CARG1, BASE, RB		// GC64: table TValue.
+    |  ldx CARG2, BASE, RC		// GC64: key TValue.
+    |  checktab CARG1			// Masks CARG1 -> GCtab ptr.
+    |   sradi ITYPE, CARG2, 47		// Key itype.
     |  bne ->vmeta_tsetv
-    |.if DUALNUM
-    |  lwz TMP0, TAB:RB->asize
-    |   bne cr1, >5
-    |   lwz TMP1, TAB:RB->array
-    |  cmplw TMP0, RC
-    |   slwi TMP0, RC, 3
-    |.else
-    |   bge cr1, >5
-    |  // Convert number key to integer, check for integerness and range.
-    |  fctiwz f1, f0
-    |    fadd f2, f0, TOBIT
-    |  stfd f1, TMPD
+    |  mr TAB:RB, CARG1
+    |  // Only integer keys hit the array part inline (DUALNUM); string keys go
+    |  // to the hash path, everything else falls back. Mirrors arm64/BC_TGETV.
+    |  cmpdi ITYPE, LJ_TISNUM		// Integer key?
     |   lwz TMP0, TAB:RB->asize
-    |    fsub f2, f2, TOBIT
-    |  lwz TMP2, TMPD_LO
-    |   lwz TMP1, TAB:RB->array
-    |    fcmpu cr1, f0, f2
-    |  cmplw cr0, TMP0, TMP2
-    |  crand 4*cr0+gt, 4*cr0+gt, 4*cr1+eq
+    |  bne >5
+    |  extsw TMP2, CARG2		// Integer key value (sign-extend low 32).
+    |   lp TMP1, TAB:RB->array
+    |  cmplw TMP0, TMP2		// Unsigned: also catches negative key.
     |   slwi TMP0, TMP2, 3
-    |.endif
     |  ble ->vmeta_tsetv		// Integer key and in array part?
-    |   lwzx TMP2, TMP1, TMP0
+    |   ldx TMP2, TMP1, TMP0		// GC64: previous array[key] TValue.
     |  lbz TMP3, TAB:RB->marked
     |    lfdx f14, BASE, RA
-    |   checknil TMP2; beq >3
+    |   cmpd TMP2, TISNIL; beq >3
     |1:
     |  andix. TMP2, TMP3, LJ_GC_BLACK	// isblack(table)
     |    stfdx f14, TMP1, TMP0
@@ -4236,8 +4200,8 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  ins_next
     |
     |3:  // Check for __newindex if previous value is nil.
-    |  lwz TAB:TMP2, TAB:RB->metatable
-    |  cmplwi TAB:TMP2, 0
+    |  lp TAB:TMP2, TAB:RB->metatable
+    |  cmpdi TAB:TMP2, 0
     |  beq <1				// No metatable: done.
     |  lbz TMP2, TAB:TMP2->nomm
     |  andix. TMP2, TMP2, 1<<MM_newindex
@@ -4245,11 +4209,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  b ->vmeta_tsetv
     |
     |5:
-    |  checkstr CARG2; bne ->vmeta_tsetv
-    |.if not DUALNUM
-    |  lwz STR:RC, 4(RC)
-    |.endif
-    |  b ->BC_TSETS_Z			// String key?
+    |  cmpdi ITYPE, LJ_TSTR; bne ->vmeta_tsetv	// String key?
+    |  rldicl STR:RC, CARG2, 0, 17	// GC64: mask key TValue -> GCstr ptr.
+    |  b ->BC_TSETS_Z
     |
     |7:  // Possible table write barrier for the value. Skip valiswhite check.
     |  barrierback TAB:RB, TMP3, TMP0
