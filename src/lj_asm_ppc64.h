@@ -856,15 +856,16 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
   if (!isk) {
     if (irt_isnum(kt)) {
       key = ra_alloc1(as, refkey, RSET_FPR);
-      /* tkey = the double's 64-bit bit pattern, bounced through the stack, with
-      ** -0.0 canonicalized to +0.0: if the pattern == 0x8000..0 (negative zero)
-      ** select the literal 0 instead (isel rT,0,rC on cr0.EQ; rA=0 means the XO
-      ** add-form literal zero). */
+      /* -0.0 canonicalized to +0.0: if the (already loaded) tkey == 0x8000..0
+      ** (negative zero) select the literal 0 instead (isel rT,0,rC on cr0.EQ;
+      ** rA=0 means the XO add-form literal zero). This must run AFTER the hash
+      ** (which reads tkey) but BEFORE the chain compare, mirroring arm64's CSEL.
+      ** The STFD+LD that fills tkey is emitted inside the hash block below so it
+      ** executes before the hash -- emitting it here would place it after the
+      ** hash (emit prepends), so the hash would read a stale tkey. */
       Reg neg0 = ra_allock(as, (intptr_t)U64x(80000000,00000000), allow);
       emit_tab(as, PPCI_ISEL | PPCF_MB(CC_EQ&3), tkey, 0, tkey);
       emit_ab(as, PPCI_CMPD, tkey, neg0);
-      emit_tai(as, PPCI_LD, tkey, RID_SP, SPOFS_TMP);
-      emit_fai(as, PPCI_STFD, key, RID_SP, SPOFS_TMP);
     } else {
       lj_assertA(irt_isaddr(kt), "bad HREF key type");
       key = ra_alloc1(as, refkey, allow);
@@ -898,12 +899,21 @@ static void asm_href(ASMState *as, IRIns *ir, IROp merge)
       emit_rotlwi(as, tmp1, tmp1, (HASH_ROT2+HASH_ROT1)&31);
       emit_tab(as, PPCI_SUBF, tmp2, dest, tmp2);
       if (irt_isnum(kt)) {
-	/* Hash the low/high 32-bit words of the canonicalized double in tkey. */
+	/* hashnum(t,o) = hashlohi(o->u32.lo, o->u32.hi<<1): the hashrot "hi" arg
+	** (tmp1, the one that gets doubled at ADD and feeds lo^=hi) must be the
+	** HIGH word of the double, and the "lo" arg (tmp2) the LOW word. The old
+	** code had them swapped (tmp1=lo32, tmp2=hi32) -> doubled the wrong word
+	** -> wrong bucket -> num-keyed lookups (e.g. hufcodes[36]) missed. */
 	emit_asb(as, PPCI_XOR, tmp2, tmp2, tmp1);
 	emit_rotlwi(as, dest, tmp1, HASH_ROT1);
-	emit_tab(as, PPCI_ADD, tmp1, tmp1, tmp1);
-	emit_rotdi(as, PPCI_RLDICL, tmp2, tkey, 32, 32);  /* hi32 of tkey. */
-	emit_rotdi(as, PPCI_RLDICL, tmp1, tkey, 0, 32);   /* lo32 of tkey. */
+	emit_tab(as, PPCI_ADD, tmp1, tmp1, tmp1);  /* tmp1 = hi32 << 1. */
+	emit_rotdi(as, PPCI_RLDICL, tmp2, tkey, 0, 32);   /* lo32 of tkey. */
+	emit_rotdi(as, PPCI_RLDICL, tmp1, tkey, 32, 32);  /* hi32 of tkey. */
+	/* Fill tkey from the double's bit pattern (bounced via the stack) HERE so
+	** it executes before the hash above reads it. The -0.0 canonicalization
+	** (in the construct block) then runs after the hash, before the compare. */
+	emit_tai(as, PPCI_LD, tkey, RID_SP, SPOFS_TMP);
+	emit_fai(as, PPCI_STFD, key, RID_SP, SPOFS_TMP);
       } else {
 	/* GC64: hashgcref(t, key->gcr) hashes the FULL tagged key value (gcr holds
 	** (itype<<47)|ptr). So lo = ptr&0xffffffff, hi = (itype<<15)|(ptr>>32).
