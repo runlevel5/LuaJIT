@@ -248,12 +248,17 @@ static void asm_fusexref(ASMState *as, PPCIns pi, Reg rt, IRRef ref,
 	ofs += IR(ir->op2)->i;
 	ref = ir->op1;
       } else {
-	/* base = string (op1, may be a const GCstr), index = op2. */
+	/* base = string (op1, may be a const GCstr), index = op2. The index is a
+	** 32-bit int whose register may have non-canonical high bits (e.g. zero-
+	** extended from a prior op, while the int value is negative-then-clamped);
+	** sign-extend it before the 64-bit base+index add, else a value like
+	** len+(-1) computed as 3+0xffffffff = 0x100000002 -> wild OOB load. */
 	Reg right, left = ra_alloc1(as, ir->op1, allow);
 	Reg tmp = ra_scratch(as, rset_exclude(allow, left));
 	right = ra_alloc1(as, ir->op2, rset_exclude(rset_exclude(allow, left), tmp));
 	emit_fai(as, pi, rt, tmp, ofs);
-	emit_tab(as, PPCI_ADD, tmp, left, right);
+	emit_tab(as, PPCI_ADD, tmp, left, tmp);
+	emit_as(as, PPCI_EXTSW, tmp, right);  /* tmp = sign_extend32(index). */
 	return;
       }
       if (!checki16(ofs)) {
@@ -377,6 +382,25 @@ static void asm_gencall(ASMState *as, const CCallInfo *ci, IRRef *args)
 	if (gpr <= REGARG_LASTGPR) {
 	  lj_assertA(rset_test(as->freeset, gpr),
 		     "reg %d not free", gpr);  /* Already evicted. */
+	  /* ELFv2: a sub-64-bit integer C-arg must be widened to the full 64-bit
+	  ** register (sign-ext for signed/int, zero-ext for u32) -- a 32-bit int
+	  ** register may carry non-canonical high bits the callee reads as a huge
+	  ** value (e.g. size_t len for lj_str_new -> "string length overflow").
+	  ** Widen FROM the source reg INTO the arg gpr (don't sign-ext in place:
+	  ** the source may be a PHI/loop-carried value -- ra_leftov can rename it). */
+	  /* ELFv2: widen a sub-64-bit integer arg in place after ra_leftov places
+	  ** it in gpr (emitted reverse -> executes after). Skip PHI values:
+	  ** ra_leftov may rename their reg to gpr, and sign-extending it in place
+	  ** would corrupt the loop-carried value (PHI int C-args are rare). */
+	  int widen = !irt_isphi(ir->t) &&
+	    (irt_isinteger(ir->t) || irt_isu32(ir->t) || irt_isu16(ir->t) ||
+	     irt_isu8(ir->t) || irt_isi8(ir->t) || irt_isi16(ir->t));
+	  if (widen) {
+	    if (irt_isu32(ir->t) || irt_isu16(ir->t) || irt_isu8(ir->t))
+	      emit_rotdi(as, PPCI_RLDICL, gpr, gpr, 0, 32);  /* clrldi: zero-ext. */
+	    else
+	      emit_as(as, PPCI_EXTSW, gpr, gpr);  /* sign-extend 32->64. */
+	  }
 	  ra_leftov(as, gpr, ref);
 	  gpr++;
 	} else {
@@ -988,9 +1012,13 @@ static void asm_strref(ASMState *as, IRIns *ir)
   if (irref_isk(ir->op2) && checki16(ofs + irr->i)) {
     emit_tai(as, PPCI_ADDI, dest, base, ofs + irr->i);
   } else {
+    /* Sign-extend the 32-bit int index before the 64-bit base+index add: its
+    ** register may carry non-canonical high bits (see asm_fusexref STRREF). */
     Reg idx = ra_alloc1(as, ir->op2, rset_exclude(RSET_GPR, base));
+    Reg tmp = ra_scratch(as, rset_exclude(rset_exclude(RSET_GPR, base), idx));
     emit_tai(as, PPCI_ADDI, dest, dest, ofs);
-    emit_tab(as, PPCI_ADD, dest, base, idx);
+    emit_tab(as, PPCI_ADD, dest, base, tmp);
+    emit_as(as, PPCI_EXTSW, tmp, idx);  /* tmp = sign_extend32(index). */
   }
 }
 
