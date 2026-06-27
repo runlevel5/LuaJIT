@@ -180,14 +180,21 @@ static Reg asm_fuseahuref(ASMState *as, IRRef ref, int32_t *ofsp, RegSet allow)
     } else if (ir->o == IR_UREFC) {
       if (irref_isk(ir->op1)) {
 	GCfunc *fn = ir_kfunc(IR(ir->op1));
-	int32_t ofs = i32ptr(&gcref(fn->l.uvptr[(ir->op2 >> 8)])->uv.tv);
-	int32_t jgl = (intptr_t)J2G(as->J);
-	if ((uint32_t)(ofs-jgl) < 65536) {
-	  *ofsp = ofs-jgl-32768;
+	/* GC64: the closed-upvalue tv is a FULL 64-bit address. The old i32ptr()
+	** truncated it to int32 (sign-extending a pointer with bit 31 set) ->
+	** ra_allock got a bogus 0xffffffff.. base -> a wild load that faulted
+	** only when GC moved memory into that range. Use 64-bit arithmetic, like
+	** emit_lsptr: JGL-relative if within reach, else materialize the 64-bit
+	** base with a signed 16-bit displacement folded into the load. */
+	uintptr_t p = (uintptr_t)&gcref(fn->l.uvptr[(ir->op2 >> 8)])->uv.tv;
+	uintptr_t jgl = (uintptr_t)J2G(as->J);
+	if ((uintptr_t)(p-jgl) < 65536) {
+	  *ofsp = (int32_t)(p-jgl-32768);
 	  return RID_JGL;
 	} else {
-	  *ofsp = (int16_t)ofs;
-	  return ra_allock(as, ofs-(int16_t)ofs, allow);
+	  int32_t i = (int16_t)(int32_t)p;
+	  *ofsp = i;
+	  return ra_allock(as, (intptr_t)(p - (uintptr_t)(intptr_t)i), allow);
 	}
       }
     } else if (ir->o == IR_TMPREF) {
