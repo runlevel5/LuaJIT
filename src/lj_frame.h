@@ -232,7 +232,9 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK };  /* Special continuations. */
 #define CFRAME_OFS_L		616
 #define CFRAME_OFS_PC		608
 #define CFRAME_OFS_PREV		600
-#define CFRAME_SIZE		640
+/* SAVE_TOC@640, SAVE_CR@648 live above the cframe info; CFRAME_SIZE grown
+** 640->656 (16-aligned) so they never alias the trace spill/param-save zone. */
+#define CFRAME_SIZE		656
 #define CFRAME_SHIFT_MULTRES	3
 #else
 #define CFRAME_OFS_ERRF		48

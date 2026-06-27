@@ -136,37 +136,43 @@
 |.define ENVREG,	r11	// Environment pointer (nested C functions).
 |
 |// Stack layout while in interpreter. Must match with lj_frame.h.
-|// GC64/ELFv2 frame map (CFRAME_SPACE=640):
+|// GC64/ELFv2 frame map (CFRAME_SPACE=656):
 |//   0      back-chain
-|//   8      SAVE_CR
 |//   16     LR-save slot written by a trace->C callee (ABI)
 |//   24     trace TOC-save (emit_call), ABI TOC-save doubleword
 |//   32..39 TMPD / 24..31 TONUM: interp FP<->int scratch (transient)
-|//   40     SAVE_TOC (interp; transient)
 |//   32..95 ELFv2 PARAM-SAVE AREA slots 0..7 (register-arg shadows; a trace->C
 |//          callee may spill its r3..r10 args here -- NO state live across call)
 |//   96..223 ELFv2 PARAM-SAVE AREA slots 8..23 (16 overflow stack-arg slots for
 |//          trace->C calls with >8 integer args; 9th arg at sp+96)
 |//   224..235 SPOFS_TMP/SPOFS_TMPW: trace FP<->int scratch (transient)
-|//   240..303 TRACE SPILL window (16 slots; sps_scale maps here) -- above the
-|//          param area so cross-call spills survive, below the reg saves
+|//   240..303 TRACE SPILL window (sps_scale maps here, SPS_FIRST=60); when a
+|//          deeply-spilling trace GROWS the frame (emit_spsub), every spill
+|//          offset shifts DOWN with sp, so the live spill region spans roughly
+|//          [interp_sp - spadj + 240 .. interp_sp + 296] -- i.e. it climbs into
+|//          the param-save zone (all transient) but, by the sps_align cap, its
+|//          top stays just below the reg saves (304). It MUST therefore not
+|//          overlap any interp state that is live across a trace, so SAVE_CR and
+|//          SAVE_TOC (read by restoreregs on return-to-C) live HIGH, not at 8/40.
 |//   304..447 GPR saves (18*8)
 |//   448..591 FPR saves (18*8)
-|//   592..639 C-frame info (LIVE across a trace exit): kept HIGH so it can never
-|//          alias the trace spill / param-save zone (the down-recursion bug).
-|//   640+16 SAVE_LR (caller's LR slot)
+|//   592..639 C-frame info (SAVE_CFRAME/PC/L/NRES/ERRF/MULTRES)
+|//   640      SAVE_TOC, 648 SAVE_CR (LIVE across a trace exit): kept HIGH so they
+|//          can never alias the trace spill / param-save zone (the down-recursion
+|//          + heavy-spill TOC/CR corruption bug). CFRAME_SPACE grown 640->656.
+|//   656+16 SAVE_LR (caller's LR slot)
 |.define SAVE_MULTRES,	632(sp) // \ 32 bit C frame info.
 |.define SAVE_ERRF,	628(sp) // |
 |.define SAVE_NRES,	624(sp) // /
 |.define SAVE_L,	616(sp) // \ 64 bit lua_State *.
 |.define SAVE_PC,	608(sp) // | 64 bit PC / sentinel.
 |.define SAVE_CFRAME,	600(sp) // / 64 bit C frame chain.
-|.define SAVE_LR,	656(sp)
-|.define CFRAME_SPACE,	640     // Delta for sp.
-|// Back chain for sp:	640(sp) <-- sp entering interpreter
+|.define SAVE_LR,	672(sp)
+|.define CFRAME_SPACE,	656     // Delta for sp (16-aligned).
+|// Back chain for sp:	656(sp) <-- sp entering interpreter
 |.define SAVE_FPR_,	448     // .. 448+18*8: 64 bit FPR saves.
 |.define SAVE_GPR_,	304     // .. 304+18*8: 64 bit GPR saves.
-|.define SAVE_TOC,	40(sp)  // TOC save area (interp; transient).
+|.define SAVE_TOC,	640(sp) // 64 bit TOC save (LIVE across trace; kept HIGH).
 |.if ENDIAN_LE
 |.define TMPD_LO,	32(sp)  // \ GC64/LE: low word at the lower address.
 |.define TMPD_HI,	36(sp)  // /
@@ -185,7 +191,7 @@
 |.define TONUM_D,	TONUM_HI
 |.endif
 |// Next frame lr:	16(sp)
-|.define SAVE_CR,	8(sp)  // 64 bit CR save.
+|.define SAVE_CR,	648(sp)  // 64 bit CR save (LIVE across trace; kept HIGH).
 |// Back chain for sp:	0(sp)	<-- sp while in interpreter
 |
 |.macro save_, reg
@@ -213,6 +219,15 @@
 |.macro restoreregs
 |  ld r0, SAVE_LR
 |  ld r12, SAVE_CR
+|  // ELFv2: r2 (TOC) is caller-saved, but C callers that reach the VM via the
+|  // LOCAL entry of vm_pcall/vm_call/etc. (e.g. docall->lua_pcall) do NOT reload
+|  // r2 after the call -- they trust the VM to preserve it. The interpreter does
+|  // (it reloads SAVE_TOC after every C helper call), but a JIT trace clobbers
+|  // r2 and the trace->interp exit path does not restore it; so on a successful
+|  // return to C through here r2 would still hold the trace's garbage TOC and the
+|  // C caller's next PLT call would fault. Restore the VM-entry TOC here (mirrors
+|  // vm_unwind_c). Must read SAVE_TOC before the sp adjustment below.
+|  .toc ld TOCREG, SAVE_TOC
 |  rest_ 14; rest_ 15; rest_ 16; rest_ 17; rest_ 18; rest_ 19
 |  mtlr r0;
 |  mtcrf 0x38, r12
@@ -5166,13 +5181,13 @@ static void emit_asm_debug(BuildCtx *ctx)
 	"\t.long %d\n"
 	"\t.byte 0xe\n\t.uleb128 %d\n"
 	"\t.byte 0x11\n\t.uleb128 65\n\t.sleb128 -2\n"
-	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 79\n",  /* CR (reg70) @ CFA-79*8 = sp+8; CFA=sp+640. */
+	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 1\n",  /* CR (reg70) @ CFA-1*8 = sp+648; CFA=sp+656. */
 	fcofs, CFRAME_SIZE);
     for (i = 14; i <= 31; i++)
       fprintf(ctx->fp,
 	"\t.byte %d\n\t.uleb128 %d\n"
 	"\t.byte %d\n\t.uleb128 %d\n",
-	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+304+), FPR@CFA-(38-i)*8 (sp+448+); CFA=sp+640. */
+	0x80+i, 58-i, 0x80+32+i, 40-i);  /* GPR@CFA-(58-i)*8 (sp+304+), FPR@CFA-(40-i)*8 (sp+448+); CFA=sp+656. */
     fprintf(ctx->fp,
 	"\t.align 2\n"
 	".LEFDE0:\n\n");
@@ -5219,13 +5234,13 @@ static void emit_asm_debug(BuildCtx *ctx)
 	"\t.uleb128 0\n"			/* augmentation length */
 	"\t.byte 0xe\n\t.uleb128 %d\n"
 	"\t.byte 0x11\n\t.uleb128 65\n\t.sleb128 -2\n"
-	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 79\n",  /* CR (reg70) @ CFA-79*8 = sp+8; CFA=sp+640. */
+	"\t.byte 0x5\n\t.uleb128 70\n\t.uleb128 1\n",  /* CR (reg70) @ CFA-1*8 = sp+648; CFA=sp+656. */
 	fcofs, CFRAME_SIZE);
     for (i = 14; i <= 31; i++)
       fprintf(ctx->fp,
 	"\t.byte %d\n\t.uleb128 %d\n"
 	"\t.byte %d\n\t.uleb128 %d\n",
-	0x80+i, 56-i, 0x80+32+i, 38-i);  /* GPR@CFA-(56-i)*8 (sp+304+), FPR@CFA-(38-i)*8 (sp+448+); CFA=sp+640. */
+	0x80+i, 58-i, 0x80+32+i, 40-i);  /* GPR@CFA-(58-i)*8 (sp+304+), FPR@CFA-(40-i)*8 (sp+448+); CFA=sp+656. */
     fprintf(ctx->fp,
 	"\t.align 2\n"
 	".LEFDE2:\n\n");
