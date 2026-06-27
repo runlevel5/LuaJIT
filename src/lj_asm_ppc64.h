@@ -718,8 +718,10 @@ static void asm_tvptr(ASMState *as, Reg dest, IRRef ref, MSize mode)
 	emit_fai(as, PPCI_STFD, src, RID_JGL, tmpofs);
 #endif
       } else if (irref_isk(ref)) {
-	/* Use the number constant itself as a TValue. */
-	ra_allockreg(as, i32ptr(ir_knum(ir)), dest);
+	/* Use the number constant itself as a TValue. GC64: its address is a full
+	** 64-bit pointer -- i32ptr() would truncate it (same bug class as the
+	** UREFC/STRREF fixes). */
+	ra_allockreg(as, i64ptr(ir_knum(ir)), dest);
       } else {
 #if LJ_SOFTFP
 	lj_assertA(0, "unsplit FP op");
