@@ -3944,11 +3944,11 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
 
   case BC_UCLO:
     |  // RA = level*8, RD = target
-    |  lwz TMP1, L->openupval
+    |  lp TMP1, L->openupval		// GC64: openupval is a full 64-bit GCRef.
     |  branch_RD			// Do this first since RD is not saved.
     |   stp BASE, L->base
-    |  cmplwi TMP1, 0
-    |   mr CARG1, L
+    |  cmpdi TMP1, 0			// GC64: 64-bit NULL test (lwz/cmplwi tested
+    |   mr CARG1, L			// only the low word -- latent FR1 bug).
     |  beq >1
     |   add CARG2, BASE, RA
     |  bl extern lj_func_closeuv	// (lua_State *L, TValue *level)
