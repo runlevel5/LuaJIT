@@ -203,3 +203,55 @@ saved instructions are cheap/hidden). The real deliverable was the validated
 ISA-gating + cross-build-diff pattern, now proven on both endians for 3 paths.
 Next: **P10** (prefixed constants = the genuinely high-value win: a multi-instr
 `emit_loadu64` -> 1-2 instr `pli`/`pld`; needs the prefixed-alignment helper first).
+
+## POWER10 (ISA 3.1) — prefixed constants
+
+### Build setup (power10 box, LE)
+`ssh power10` = ppc64le Fedora 44, gcc 16.1.1, native POWER10 (ISA 3.1).
+Build: `make XCFLAGS="-mcpu=power10 -mno-pcrel" TARGET_CFLAGS="-mcpu=power10 -mno-pcrel"`.
+`-mcpu=power10` -> _ARCH_PWR10 -> LJ_ARCH_VERSION=100. **`-mno-pcrel` is REQUIRED**:
+gcc-16 defaults to -mpcrel under -mcpu=power10, which makes external calls skip the
+TOC restore; the linker then rejects the TOC-based hand-written VM assembly
+(`bl <fn> lacks nop, can't restore toc` at ~all `bl extern` sites). The LuaJIT
+ppc64 VM is TOC/r2-based, so -mno-pcrel keeps TOC addressing. (A full PC-relative
+VM would be a separate port; pli/pld immediate forms don't need pcrel.) Keep a P8
+build dir for the cross-diff. BE-P10 DEFERRED (box pending; prefixed constants are
+endian-neutral so LE validation suffices).
+
+### The hard part: 64-byte prefixed-instruction alignment (commit d4973d02)
+A prefixed instr is 8 bytes (prefix word low, suffix word high) and must not cross
+a 64-byte boundary. The emitter runs BACKWARD (*--mcp); emit_prefixed() writes
+suffix then prefix, landing the instr at [mcp,mcp+8). It straddles iff
+(mcp&63)==60, so when (mcp-8)&63==60 we prepend a NOP first (shifting it down 4
+bytes). UNIT-TESTED in a standalone C harness replicating the backward emitter:
+every start offset mod 64, single + 5-consecutive -> no prefix word at offset 60,
+every [pfx,pfx+8) within one 64-byte block. PASS. (Uses the real as->mcp address,
+so correct regardless of mcode-area alignment.) pli/pld encodings cross-checked
+byte-for-byte vs `gcc -mcpu=power10`.
+
+### emit_loadu64/emit_loadi -> pli (commit b8de9b38)
+Gated `#if LJ_ARCH_VERSION >= 100`, P9/P8 intact as `#else`. A single prefixed
+`pli rD,imm` replaces lis+ori for a non-checki16 32-bit constant (and the lis-only
+case); the full-64-bit path's hi32 load also becomes one pli. The cheaper 1-instr
+JGL-anchor addi / kdelta1 forms (4 bytes) are still preferred over pli (8 bytes).
+
+Validation (power10 box, LE): constants correct -- KINT>16b, negative, pointer
+casts, KINT64 -- jit==joff==P8. P10 trace emits 9 pli / 0 lis where P8 emits 9 lis
+/ 0 pli; every prefixed instr aligned (mod 64 != 60). P8-vs-P10 gen4 cross-build
+diff: P8 = 0 diffs / 0 crashes (1500 seeds). [P10 result pending in this run.]
+Full P10 regression: diffs=0 (bar pre-existing joff debug_gc).
+
+### Benchmark — HONEST: no measurable wall-clock win
+Constant-heavy loops: P8 ~= P10 (e.g. 0.88s == 0.88s). Two reasons: (1) loop-
+invariant constants are HOISTED out of the hot loop by the JIT, so the const load
+runs once per trace, not per iteration; (2) pli replaces lis+ori with 1 instr vs 2
+but the SAME 8 bytes -- the lis->ori dependency is hidden on the wide OoO POWER10
+core, and pli is not a code-SIZE win over lis+ori (only over 3+ instr sequences,
+which are rarer since the JGL anchor already does most pointers in 1 instr). So the
+genuine benefit is "1 fused instr vs a 2-instr dependent pair" (decode/rename
+pressure), which does not move wall-clock or code size measurably here. Consistent
+with the P9 finding: ISA-3.0/3.1 integer/const ops are correct and reduce
+instruction COUNT but the saved work is hidden by the wide core. The real
+deliverable remains the validated, alignment-correct prefixed-instruction
+infrastructure (the alignment helper gates ALL future P10 prefixed paths) + the
+cross-build-diff-identical guarantee.
