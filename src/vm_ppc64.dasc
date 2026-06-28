@@ -380,6 +380,14 @@
 |  rldicl reg, reg, 0, 17
 |  cmpdi ITYPE, tp
 |.endmacro
+|// Non-destructive variant: extract itype into ITYPE, mask the GC pointer into
+|// a SEPARATE dst, and leave the tagged TValue in reg untouched (so the caller
+|// can still return it). Sets cr0 to (itype == tp). Mirrors arm64 checktp dst.
+|.macro checktp_d, dst, reg, tp
+|  sradi ITYPE, reg, 47
+|  rldicl dst, reg, 0, 17
+|  cmpdi ITYPE, tp
+|.endmacro
 |.macro checkstr, reg; checktp reg, LJ_TSTR; .endmacro
 |.macro checktab, reg; checktp reg, LJ_TTAB; .endmacro
 |.macro checkfunc, reg; checktp reg, LJ_TFUNC; .endmacro
@@ -1195,10 +1203,8 @@ static void build_subroutines(BuildCtx *ctx)
   |.macro .ffunc_2, name
   |->ff_ .. name:
   |  cmplwi NARGS8:RC, 16
-  |   lwz CARG3, 0(BASE)
-  |    lwz CARG4, 8(BASE)
-  |   lwz CARG1, 4(BASE)
-  |    lwz CARG2, 12(BASE)
+  |   ld CARG3, 0(BASE)			// GC64: arg1 = full TValue.
+  |    ld CARG4, 8(BASE)			// GC64: arg2 = full TValue.
   |  blt ->fff_fallback
   |.endmacro
   |
@@ -1335,16 +1341,19 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.ffunc_2 setmetatable
   |  // Fast path: no mt for table yet and not clearing the mt.
-  |   checktab CARG3; bne ->fff_fallback
-  |  lwz TAB:TMP1, TAB:CARG1->metatable
-  |   checktab CARG4; bne ->fff_fallback
-  |  cmplwi TAB:TMP1, 0
-  |   lbz TMP3, TAB:CARG1->marked
-  |  bne ->fff_fallback
+  |  // GC64: CARG3/CARG4 are full TValues. Use the NON-destructive checktp_d so
+  |  // CARG3 stays the tagged table TValue for fff_restv to return; TMP1/TMP2 get
+  |  // the masked GCtab / GCtab(mt) pointers. metatable is a 64-bit GCRef.
+  |   checktp_d TAB:TMP1, CARG3, LJ_TTAB; bne ->fff_fallback
+  |   checktp_d TAB:TMP2, CARG4, LJ_TTAB; bne ->fff_fallback
+  |  lp TAB:TMP0, TAB:TMP1->metatable
+  |   lbz TMP3, TAB:TMP1->marked
+  |  cmpdi TAB:TMP0, 0
+  |  bne ->fff_fallback			// Already has a metatable: fall back.
   |   andix. TMP0, TMP3, LJ_GC_BLACK	// isblack(table)
-  |    stw TAB:CARG2, TAB:CARG1->metatable
+  |    stp TAB:TMP2, TAB:TMP1->metatable
   |   beq ->fff_restv
-  |  barrierback TAB:CARG1, TMP3, TMP0
+  |  barrierback TAB:TMP1, TMP3, TMP0
   |  b ->fff_restv
   |
   |.ffunc rawget
@@ -1971,10 +1980,9 @@ static void build_subroutines(BuildCtx *ctx)
   |
   |.ffunc string_byte			// Only handle the 1-arg case here.
   |  cmplwi NARGS8:RC, 8
-  |   lwz CARG3, 0(BASE)
-  |    lwz STR:CARG1, 4(BASE)
+  |   ld CARG3, 0(BASE)			// GC64: arg1 = full TValue.
   |  bne ->fff_fallback			// Need exactly 1 argument.
-  |   checkstr CARG3
+  |   checktp_d STR:CARG1, CARG3, LJ_TSTR	// Mask -> GCstr, leave CARG3 tagged.
   |   bne ->fff_fallback
   |  lwz TMP0, STR:CARG1->len
   |.if DUALNUM
