@@ -334,6 +334,18 @@ typedef enum PPCIns {
   ** overflow (OV32) without the <<32 shift trick in asm_arithov. */
   PPCI_MCRXRX = 0x7c000480,
 
+  /* ISA 3.1 (POWER10) prefixed instructions (8 bytes: prefix word then suffix
+  ** word; must not cross a 64-byte boundary -- see emit_prefixed). Encodings
+  ** cross-checked vs `gcc -mcpu=power10`.
+  **   pli  rD,imm34 : prefix 0x06000000|((imm>>16)&0x3ffff); suffix
+  **                   0x38000000|(rD<<21)|(imm&0xffff)  (paddi RA=0,R=0).
+  **   pld  rD,d(RA),R: prefix 0x04000000|(R<<20)|((d>>16)&0x3ffff); suffix
+  **                   0xe4000000|(rD<<21)|(RA<<16)|(d&0xffff). */
+  PPCI_PLI = 0x06000000,	/* Prefix word for pli/paddi (R=0). */
+  PPCI_PADDI_SUFFIX = 0x38000000,
+  PPCI_PLD = 0x04000000,	/* Prefix word for pld. */
+  PPCI_PLD_SUFFIX = 0xe4000000,
+
   PPCI_CMPD = 0x7c200000,
   PPCI_CMPLD = 0x7c200040,
   PPCI_CMPDI = 0x2c200000,

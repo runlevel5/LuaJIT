@@ -32,6 +32,23 @@ static void emit_tai(ASMState *as, PPCIns pi, Reg rt, Reg ra, int32_t i)
   emit_tab(as, (pi) | PPCF_C((rc) & 31), (rf)&31, (ra)&31, (rb)&31)
 #define emit_fai(as, pi, rf, ra, i)	emit_tai(as, (pi), (rf)&31, (ra), (i))
 
+#if LJ_ARCH_VERSION >= 100
+/* Emit an ISA-3.1 (POWER10) prefixed instruction: a prefix word (lower
+** address) followed by a suffix word. Per the ISA, the 8-byte prefixed
+** instruction must NOT cross a 64-byte boundary. The emitter runs BACKWARD
+** (*--mcp), so we write suffix then prefix; the instruction ends up at
+** [mcp, mcp+8). It straddles iff (mcp & 63) == 60. To avoid that, prepend a
+** NOP first (at the slot just above), which shifts the prefixed instruction
+** down by 4 bytes so the prefix lands at an offset != 60. */
+static void emit_prefixed(ASMState *as, PPCIns prefix, PPCIns suffix)
+{
+  if ((((uintptr_t)as->mcp - 8) & 63) == 60)
+    *--as->mcp = PPCI_NOP;		/* Pad so the prefixed insn fits in one block. */
+  *--as->mcp = suffix;
+  *--as->mcp = prefix;
+}
+#endif
+
 static void emit_rot(ASMState *as, PPCIns pi, Reg ra, Reg rs,
 		     int32_t n, int32_t b, int32_t e)
 {
