@@ -238,8 +238,8 @@ JGL-anchor addi / kdelta1 forms (4 bytes) are still preferred over pli (8 bytes)
 Validation (power10 box, LE): constants correct -- KINT>16b, negative, pointer
 casts, KINT64 -- jit==joff==P8. P10 trace emits 9 pli / 0 lis where P8 emits 9 lis
 / 0 pli; every prefixed instr aligned (mod 64 != 60). P8-vs-P10 gen4 cross-build
-diff: P8 = 0 diffs / 0 crashes (1500 seeds). [P10 result pending in this run.]
-Full P10 regression: diffs=0 (bar pre-existing joff debug_gc).
+diff: P8 = 0 diffs / 0 crashes; P10 = 0 diffs / 0 crashes (1500 seeds each on the
+power10 box) -- IDENTICAL. Full P10 regression: diffs=0 (bar pre-existing joff debug_gc).
 
 ### Benchmark — HONEST: no measurable wall-clock win
 Constant-heavy loops: P8 ~= P10 (e.g. 0.88s == 0.88s). Two reasons: (1) loop-
