@@ -255,3 +255,39 @@ instruction COUNT but the saved work is hidden by the wide core. The real
 deliverable remains the validated, alignment-correct prefixed-instruction
 infrastructure (the alignment helper gates ALL future P10 prefixed paths) + the
 cross-build-diff-identical guarantee.
+
+## Codegen-quality investigation (2026-06-29) — real wins beyond ISA tiers
+
+The ISA-3.0/3.1 micro-ops were all correct but ~0 wall-clock (wide OoO cores +
+JIT hoisting hide them). PIVOT: baseline (POWER8) codegen quality, where ppc64
+lags arm64. Evidence below; benefits all builds/endians.
+
+### Reference gap (evidence)
+fannkuch trace: **arm64 = 2127 instrs, ppc64 = 2965 (~39% larger)**. Instruction
+mix (ppc64 vs arm64):
+- ppc64 `rldicl`(344)+`rldicr`(195)+`sradi`(82) = 621 shift/mask vs arm64
+  `and`(61)+`asr`(61) = 122. The bulk is GC64 pointer untag (`rldicl rX,rX,0,17`
+  = GCVMASK) + itype extract (`sradi 47`), emitted on every GCRef deref; arm64
+  folds the mask into `and x,x,#imm` and into addressing/compare operands.
+- ppc64 `lis`(182)+`ori`(127) const materialization (2 instr/const) vs arm64
+  `mov`/`movn` (1 instr/const).
+
+### Prioritized real-win list
+
+| # | opportunity | evidence | est. win | effort | status |
+|---|-------------|----------|----------|--------|--------|
+| 1 | **FP<->int direct GPR<->FPR moves** (mtvsrd/mfvsrd vs stack round-trip) | conv-dependent chain P9 3.39->3.05s (~10%), P10 1.24->1.18s (~5%); ray ~3%, pidigits ~10% | 3-10% on conv-heavy, neutral else | low | **DONE (98f04781)** |
+| 2 | C-call TOC save/restore (`std/ld r2,24`) skip for same-module calls | call-heavy trace: std/ld r2 ~9% of trace instrs; but C-call body dominates wall-clock | ~1-3% on call-heavy only | med (same-module detection + bl-range check; correctness-sensitive) | candidate |
+| 3 | GC64 pointer-untag density (`rldicl ,0,17` per GCRef) | 621 mask/shift instrs in fannkuch (vs arm64 122) | unknown; likely small (cheap ops, OoO-hidden) | high (needs fold into addressing or redundant-mask elimination; ppc has no masked-load) | investigate, likely low ROI |
+| 4 | const materialization lis+ori (2 instr) | 309 in fannkuch | ~0 wall-clock (P10 pli proved neutral; OoO-hidden) | n/a | NOT worth it (proven neutral) |
+| 5 | spill behavior / dispatch / snapshot overhead | not yet measured | unknown | - | not investigated |
+
+HONEST META-FINDING: on these wide OoO POWER9/10 cores, instruction-count
+reductions rarely move wall-clock unless the removed work is on a tight
+dependency chain (which is why #1 wins on dependent conv chains but is neutral
+when conversions parallelize). #2 is the next-best concrete candidate but its
+win is bounded by the C-call body cost. #3/#4 are large instruction-count gaps
+but the ops are cheap and OoO-hidden, so likely low ROI -- would need profiling
+evidence of a real stall before implementing. Recommend: ship #1 (done), then
+evaluate #2 with a same-module-call fast path IF call-heavy workloads matter;
+treat #3/#4 as "measure before touching."
