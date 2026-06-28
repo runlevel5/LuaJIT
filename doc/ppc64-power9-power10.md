@@ -162,3 +162,44 @@ rule, NOT implemented. `PPCI_SETB` (lj_target_ppc64.h) + the `setb` DynASM templ
 (dasm_ppc.lua) are added as ready infrastructure for any future 3-way
 compare-to-value site, but nothing emits them today. No fast path, no benchmark
 (nothing changed), cross-build diff trivially identical (no codegen change).
+
+### POC 3: mcrxrx (32-bit overflow primitive) for asm_arithov (commit pending)
+
+`asm_arithov` (IR_ADDOV/SUBOV/MULOV -- the overflow-guarded integer add/sub/mul
+that promotes to double on 32-bit overflow). MUL already uses `mullwo.` (a
+32x32->32 op whose OV/SO are natively 32-bit; unchanged). ADD/SUB on GC64 needed
+a 5-instruction trick: `addo./subfo.` are 64-bit ops, so to catch *32-bit*
+overflow the P8 path shifts both operands <<32, runs the flag op on the shifted
+values (overflows 64-bit iff the low 32 overflow), guards, then does a separate
+plain add/subf for the real result (rldicr x2 + addo. + add/subf + guard).
+
+POWER9 `mcrxrx BF` copies XER[OV,OV32,CA,CA32] into a CR field (cr0: LT=OV,
+GT=OV32, EQ=CA, SO=CA32). `addo`/`subfo` (OE=1) set OV32 = the 32-bit signed
+overflow of the low-32 result AND compute the result. So the P9 path is:
+`addo/subfo dest,l,r` ; `mcrxrx cr0` ; guard `CC_GT` (OV32) -- **3 instructions,
+no shift trick, no separate result add** (5 -> 3). Gated `#if LJ_ARCH_VERSION >=
+90`; P8 path intact as `#else`. (PPCI_MCRXRX added to lj_target_ppc64.h; emitted
+as a raw word like the existing PPCI_MCRXR.)
+
+Verified: P9 trace emits `addo; .long 0x7c000480 (mcrxrx); bgt ->exit` (no
+rldicr<<32). Overflow correct for add/sub, both signs, exact int32 boundaries
+(2147483647+1, INT_MIN-1, sum 1..100000 = 5000050000) jit==joff==P8, both endians
+(LE power9 + BE KVM guest MSB). P8-vs-P9 gen4 cross-build diff IDENTICAL (LE 1500
+seeds: 0 diffs/0 crashes each). Regression diffs=0.
+
+Benchmark (overflow-guarded add/sub hot loop): like modulo, the wall-clock win is
+negligible (P8 ~1.86s == P9 ~1.86s) -- the 2 extra `rldicr` shifts in the P8 path
+are independent and dual-issue on the wide POWER core, hidden by the loop's other
+latencies. The benefit is code size (fewer mcode bytes per overflow-guarded op),
+not speed, on this core.
+
+### P9 phase summary
+
+P9 fast paths complete: **modulo** (modsw, marginal interp win), **setb** (no
+applicable site -- not emitted), **mcrxrx** (overflow, 5->3 insns, code-size win).
+Honest overall: the P9 ISA-3.0 integer ops are correct and reduce instruction
+count, but wall-clock gains are negligible on the superscalar POWER9 core (the
+saved instructions are cheap/hidden). The real deliverable was the validated
+ISA-gating + cross-build-diff pattern, now proven on both endians for 3 paths.
+Next: **P10** (prefixed constants = the genuinely high-value win: a multi-instr
+`emit_loadu64` -> 1-2 instr `pli`/`pld`; needs the prefixed-alignment helper first).

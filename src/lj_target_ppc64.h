@@ -329,6 +329,11 @@ typedef enum PPCIns {
   ** interp's 2-way compare-to-value sites use isel). See the P9/P10 doc. */
   PPCI_SETB = 0x7c000100,
 
+  /* ISA 3.0 (POWER9) mcrxrx (BF=0): copy XER[OV,OV32,CA,CA32] -> cr0
+  ** (cr0: LT=OV, GT=OV32, EQ=CA, SO=CA32). Lets addo/subfo expose the 32-bit
+  ** overflow (OV32) without the <<32 shift trick in asm_arithov. */
+  PPCI_MCRXRX = 0x7c000480,
+
   PPCI_CMPD = 0x7c200000,
   PPCI_CMPLD = 0x7c200040,
   PPCI_CMPDI = 0x2c200000,

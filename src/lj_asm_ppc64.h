@@ -1647,17 +1647,37 @@ static void asm_arithov(ASMState *as, IRIns *ir, PPCIns pi)
     as->flagmcp = NULL;
     as->mcp++;
   }
+  if (pi == PPCI_MULLWO) {
+    /* mullwo. is a 32x32->32 multiply whose OV/SO already reflect 32-bit
+    ** overflow, so the plain dot-form suffices. */
+    asm_guardcc(as, CC_SO);
+    dest = ra_dest(as, ir, RSET_GPR);
+    left = ra_alloc2(as, ir, RSET_GPR);
+    right = (left >> 8); left &= 255;
+    emit_tab(as, pi|PPCF_DOT, dest, left, right);
+    return;
+  }
+#if LJ_ARCH_VERSION >= 90
+  /* POWER9 (ISA 3.0): addo/subfo set XER[OV32] = 32-bit signed overflow of the
+  ** low-32 result. mcrxrx copies OV32 into cr0[GT], so a single addo/subfo (it
+  ** also computes the result) + mcrxrx + a GT guard replaces the P8 <<32 shift
+  ** trick (5 insns -> 3, and no separate result add). Emitted in reverse:
+  ** addo/subfo dest,...; mcrxrx cr0; <guard CC_GT>. */
+  {
+    int sub = (pi == PPCI_SUBFO);
+    asm_guardcc(as, CC_GT);			/* OV32 is cr0[GT] after mcrxrx. */
+    dest = ra_dest(as, ir, RSET_GPR);
+    left = ra_alloc2(as, ir, RSET_GPR);
+    right = (left >> 8); left &= 255;
+    *--as->mcp = PPCI_MCRXRX;			/* cr0 <- XER[OV,OV32,CA,CA32]. */
+    if (sub) { Reg tmp = left; left = right; right = tmp; }  /* subf: r - l. */
+    emit_tab(as, pi, dest, left, right);	/* addo/subfo (OE=1, sets OV32). */
+  }
+#else
   asm_guardcc(as, CC_SO);
   dest = ra_dest(as, ir, RSET_GPR);
   left = ra_alloc2(as, ir, RSET_GPR);
   right = (left >> 8); left &= 255;
-  if (pi == PPCI_MULLWO) {
-    /* mullwo. is a 32x32->32 multiply whose OV/SO already reflect 32-bit
-    ** overflow, so the plain dot-form suffices. */
-    if (pi == PPCI_SUBFO) { Reg tmp = left; left = right; right = tmp; }
-    emit_tab(as, pi|PPCF_DOT, dest, left, right);
-    return;
-  }
   /* GC64: addo./subo. are 64-bit ops -- their OV/SO only catch a 64-bit
   ** overflow, not the 32-bit Lua integer overflow we must guard. Detect 32-bit
   ** overflow like the interpreter's addo32./subo32. macros: shift both operands
@@ -1680,6 +1700,7 @@ static void asm_arithov(ASMState *as, IRIns *ir, PPCIns pi)
     emit_rotdi(as, PPCI_RLDICR, RID_TMP, sr, 32, 31);  /* sr << 32. */
     emit_rotdi(as, PPCI_RLDICR, t0, sl, 32, 31);       /* sl << 32. */
   }
+#endif
 }
 
 #define asm_addov(as, ir)	asm_arithov(as, ir, PPCI_ADDO)
