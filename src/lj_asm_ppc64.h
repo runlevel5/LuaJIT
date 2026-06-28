@@ -554,10 +554,14 @@ static void asm_tointg(ASMState *as, IRIns *ir, Reg left)
 static void asm_tobit(ASMState *as, IRIns *ir)
 {
   RegSet allow = RSET_FPR;
-  Reg dest = ra_dest(as, ir, RSET_GPR);
+  /* Allocate the FPR operands (incl. the bias KNUM, whose far const load may
+  ** need a GPR base) BEFORE the GPR dest. Allocating dest first let the bias
+  ** const-load's base GPR collide with dest -> dest clobbered before its use
+  ** (a wild load). Mirrors arm64's ordering (dest last). */
   Reg left = ra_alloc1(as, ir->op1, allow);
   Reg right = ra_alloc1(as, ir->op2, rset_clear(allow, left));
   Reg tmp = ra_scratch(as, rset_clear(allow, right));
+  Reg dest = ra_dest(as, ir, RSET_GPR);
   emit_tai(as, PPCI_LWZ, dest, RID_SP, SPOFS_TMPLO);
   emit_fai(as, PPCI_STFD, tmp, RID_SP, SPOFS_TMP);
   emit_fab(as, PPCI_FADD, tmp, left, right);
@@ -622,16 +626,19 @@ static void asm_conv(ASMState *as, IRIns *ir)
 		 "bad type for checked CONV");
       asm_tointg(as, ir, ra_alloc1(as, lref, RSET_FPR));
     } else if (irt_is64(ir->t)) {  /* FP -> int64/uint64 conversion (FCTIDZ). */
-      Reg dest = ra_dest(as, ir, RSET_GPR);
+      /* Allocate the FPR source (its far KNUM load may need a GPR base) and the
+      ** scratch BEFORE the GPR dest, so the const-load base can't collide with
+      ** dest and clobber it. Same fix as asm_tobit; cf. arm64. */
       Reg left = ra_alloc1(as, lref, RSET_FPR);
       Reg tmp = ra_scratch(as, rset_exclude(RSET_FPR, left));
+      Reg dest = ra_dest(as, ir, RSET_GPR);
       emit_tai(as, PPCI_LD, dest, RID_SP, SPOFS_TMP);
       emit_fai(as, PPCI_STFD, tmp, RID_SP, SPOFS_TMP);
       emit_fb(as, PPCI_FCTIDZ, tmp, left);
     } else {
-      Reg dest = ra_dest(as, ir, RSET_GPR);
       Reg left = ra_alloc1(as, lref, RSET_FPR);
       Reg tmp = ra_scratch(as, rset_exclude(RSET_FPR, left));
+      Reg dest = ra_dest(as, ir, RSET_GPR);
       lj_assertA(!irt_isu32(ir->t), "bad CONV u32.fp emitted");
       emit_tai(as, PPCI_LWZ, dest, RID_SP, SPOFS_TMPLO);
       emit_fai(as, PPCI_STFD, tmp, RID_SP, SPOFS_TMP);
