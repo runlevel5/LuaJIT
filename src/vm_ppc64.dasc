@@ -2697,6 +2697,39 @@ static void build_subroutines(BuildCtx *ctx)
   |->vm_sfi2d_2:
   |  sfi2d CARG3, CARG4
   |
+  |.if VER >= 90
+  |  // POWER9 (ISA 3.0): use modsw for the C-truncating remainder, replacing
+  |  // mullw+sub. The edge cases (b==0 and INT_MIN%-1) MUST set XER[SO] exactly
+  |  // like the P8 divwo., because callers (interp ins_arith `bso` and the JIT)
+  |  // detect them via SO to fall back to FP modulo (e.g. 5%0 -> nan, not 0).
+  |  // modsw never sets SO, so detect the edges explicitly and run divwo. only on
+  |  // them to set SO; the common path is a single modsw (no divide+mul+sub).
+  |->vm_modi:
+  |  cmpwi cr1, CARG2, 0			// b == 0?
+  |   xor CARG3, CARG1, CARG2		// sign(a) ^ sign(b) (before clobbering CARG1).
+  |  beq cr1, >1				// Edge: b == 0.
+  |  cmpwi cr1, CARG2, -1
+  |  beq cr1, >2				// Possible edge: b == -1 (check INT_MIN).
+  |3:
+  |  modsw CARG1, CARG1, CARG2		// CARG1 = a - (a/b)*b (truncating remainder).
+  |   cmpwi CARG3, 0
+  |  bgelr				// Signs same: floored == truncated. Done.
+  |  cmpwi CARG1, 0; beqlr		// rem == 0: done.
+  |  add CARG1, CARG1, CARG2		// Floored: rem += b.
+  |  blr
+  |2:  // b == -1: a % -1 == 0 always; but INT_MIN % -1 overflows -> set SO.
+  |  lus TMP0, 0x8000			// INT_MIN (2^31, sign bit only).
+  |  cmpw CARG1, TMP0
+  |  bne <3				// a != INT_MIN: modsw gives 0 (fast path ok).
+  |  // INT_MIN % -1: set SO like divwo., return 0.
+  |  divwo. TMP0, CARG1, CARG2		// Sets OV/SO (overflow); result unused.
+  |  li CARG1, 0
+  |  blr
+  |1:  // b == 0: set SO like divwo. (caller falls back to FP), return 0.
+  |  divwo. TMP0, CARG1, CARG2		// Sets OV/SO (divide by zero).
+  |  li CARG1, 0
+  |  blr
+  |.else
   |->vm_modi:
   |  divwo. TMP0, CARG1, CARG2
   |  bso >1
@@ -2714,6 +2747,7 @@ static void build_subroutines(BuildCtx *ctx)
   |  beqlr
   |  clrso TMP0			// Clear SO for -2147483648 % -1 and return 0.
   |  blr
+  |.endif
   |
   |//-----------------------------------------------------------------------
   |//-- Number conversion functions ----------------------------------------

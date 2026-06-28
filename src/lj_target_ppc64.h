@@ -317,6 +317,12 @@ typedef enum PPCIns {
   PPCI_DIVDU = 0x7c000392,
   PPCI_EXTSW = 0x7c0007b4,
 
+  /* ISA 3.0 (POWER9) modulo: RT = RA % RB (C-truncating remainder). */
+  PPCI_MODSW = 0x7c000616,
+  PPCI_MODUW = 0x7c000216,
+  PPCI_MODSD = 0x7c000612,
+  PPCI_MODUD = 0x7c000212,
+
   PPCI_CMPD = 0x7c200000,
   PPCI_CMPLD = 0x7c200040,
   PPCI_CMPDI = 0x2c200000,
