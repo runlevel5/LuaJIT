@@ -323,6 +323,12 @@ typedef enum PPCIns {
   PPCI_MODSD = 0x7c000612,
   PPCI_MODUD = 0x7c000212,
 
+  /* ISA 3.0 (POWER9) setb RT,BFA: RT = -1/0/+1 from CR field BFA (LT/GT bits).
+  ** Provided for completeness; NOT currently emitted -- the backend has no
+  ** 3-way (-1/0/+1) comparison-to-value site (all IR compares are guards; the
+  ** interp's 2-way compare-to-value sites use isel). See the P9/P10 doc. */
+  PPCI_SETB = 0x7c000100,
+
   PPCI_CMPD = 0x7c200000,
   PPCI_CMPLD = 0x7c200040,
   PPCI_CMPDI = 0x2c200000,

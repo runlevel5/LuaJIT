@@ -709,6 +709,7 @@ map_op = {
   moduw_3 =	"7c000216RRR",
   modsd_3 =	"7c000612RRR",
   modud_3 =	"7c000212RRR",
+  setb_2 =	"7c000100RX",
   popcntd_2 =	"7c0003f4RR~",
   cmpb_3 =	"7c0003f8RR~R.",
   mcrxr_1 =	"7c000400X",

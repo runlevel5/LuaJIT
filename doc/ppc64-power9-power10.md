@@ -130,3 +130,35 @@ TAKEAWAY: integer modulo is rarely a hot bottleneck and the win is marginal; the
 POC's real value was proving the ISA-gating + cross-build-validation pattern
 end-to-end on both endians. Higher-value P9/P10 targets (prefixed constants, setb)
 should follow.
+
+### POC 2: setb (branchless compare-to-value) — ASSESSED, NOT APPLICABLE
+
+`setb RT,BFA` sets RT to -1/0/+1 from CR field BFA's LT/GT bits (a 3-way
+sign-of-comparison as a value, no branch). Surveyed every value-producing
+comparison site in the ppc64 backend (asm_comp/asm_intcomp/asm_intcomp64_/
+asm_tointg/asm_strto, asm_min_max, the interp compare-to-value paths):
+
+- **All IR comparisons (IR_LT/LE/GT/GE/EQ/NE, ABC, type checks) are GUARDS** —
+  `asm_comp` emits `asm_guardcc` (a conditional branch to a side exit). A guard
+  must branch; `setb` (which produces a value) cannot replace it. This is
+  fundamental LuaJIT trace design.
+- **min/max is already branchless** — FP via `fsel`, integer via the
+  SUBFC/SUBFE carry trick. No compare-to-value, no branch.
+- **The interpreter's compare-to-value sites already use `isel`** (ISA 2.06,
+  P8-available) and they are **2-way** selects (`-1 if LT else 0`, etc.), not the
+  **3-way** -1/0/+1 that `setb` produces. `setb` would give +1 for the GT case
+  where these want 0 → semantically wrong, so it cannot replace them.
+- **No 3-way -1/0/+1 comparison-result materialization exists** in the backend
+  (string comparison and sort comparators go through C helpers / Lua calls).
+
+Cross-check: arm64 HAS the equivalent (`cset`/`csinc`) but **also uses none of
+them for value-producing compares** — its `asm_comp` is likewise all `asm_guardcc`.
+This confirms it's a design property, not a ppc64 gap.
+
+CONCLUSION: **`setb` has no applicable site.** Forcing it would mean either no-op
+changes or contorting working `isel`/guard code with wrong-valued results, for zero
+benefit — and risk on correctness-complete code. Per the "no speculative changes"
+rule, NOT implemented. `PPCI_SETB` (lj_target_ppc64.h) + the `setb` DynASM template
+(dasm_ppc.lua) are added as ready infrastructure for any future 3-way
+compare-to-value site, but nothing emits them today. No fast path, no benchmark
+(nothing changed), cross-build diff trivially identical (no codegen change).
