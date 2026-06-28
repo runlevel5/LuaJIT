@@ -544,10 +544,13 @@ static void asm_tointg(ASMState *as, IRIns *ir, Reg left)
   emit_tai(as, PPCI_STW, RID_TMP, RID_SP, SPOFS_TMPLO);
   emit_tai(as, PPCI_STW, hibias, RID_SP, SPOFS_TMPHI);
   emit_asi(as, PPCI_XORIS, RID_TMP, dest, 0x8000);
-  emit_tai(as, PPCI_LWZ, dest, RID_SP, SPOFS_TMPLO);
+  /* Direct FPR->GPR move (mfvsrd) of the FCTIWZ result + clrldi (zero-extend
+  ** the low 32), instead of the STFD+LWZ stack round-trip. dest = (int32)left;
+  ** the bias reconstruction + FCMPU above then verify the conversion. */
+  emit_rotdi(as, PPCI_RLDICL, dest, dest, 0, 32);
+  emit_tab(as, PPCI_MFVSRD, tmp & 31, dest, 0);
   emit_lsptr(as, PPCI_LFS, (fbias & 31),
 	     (void *)&as->J->k32[LJ_K32_2P52_2P31], RSET_GPR);
-  emit_fai(as, PPCI_STFD, tmp, RID_SP, SPOFS_TMP);
   emit_fb(as, PPCI_FCTIWZ, tmp, left);
 }
 
@@ -596,11 +599,12 @@ static void asm_conv(ASMState *as, IRIns *ir)
       /* NYI: full unsigned correction for u64 >= 2^63 (rare in practice). */
       Reg left = ra_alloc1(as, lref, RSET_GPR);
       Reg tmp = ra_scratch(as, rset_exclude(RSET_FPR, dest));
-      /* Emitted in reverse, so execution order is: STD; LFD; FCFID; [FRSP]. */
+      /* Direct GPR->FPR move (ISA 2.07 mtvsrd), then convert. Avoids the
+      ** STD+LFD stack round-trip (a store-to-load-forwarding stall).
+      ** Execution order (emitted in reverse): MTVSRD; FCFID; [FRSP]. */
       if (irt_isfloat(ir->t)) emit_fb(as, PPCI_FRSP, dest, dest);
       emit_fb(as, PPCI_FCFID, dest, tmp);
-      emit_fai(as, PPCI_LFD, tmp, RID_SP, SPOFS_TMP);
-      emit_tai(as, PPCI_STD, left, RID_SP, SPOFS_TMP);
+      emit_tab(as, PPCI_MTVSRD, tmp & 31, left, 0);
     } else {  /* Integer to FP conversion. */
       /* IRT_INT: Flip hibit, bias with 2^52, subtract 2^52+2^31. */
       /* IRT_U32: Bias with 2^52, subtract 2^52. */
@@ -626,22 +630,24 @@ static void asm_conv(ASMState *as, IRIns *ir)
 		 "bad type for checked CONV");
       asm_tointg(as, ir, ra_alloc1(as, lref, RSET_FPR));
     } else if (irt_is64(ir->t)) {  /* FP -> int64/uint64 conversion (FCTIDZ). */
-      /* Allocate the FPR source (its far KNUM load may need a GPR base) and the
-      ** scratch BEFORE the GPR dest, so the const-load base can't collide with
-      ** dest and clobber it. Same fix as asm_tobit; cf. arm64. */
       Reg left = ra_alloc1(as, lref, RSET_FPR);
       Reg tmp = ra_scratch(as, rset_exclude(RSET_FPR, left));
       Reg dest = ra_dest(as, ir, RSET_GPR);
-      emit_tai(as, PPCI_LD, dest, RID_SP, SPOFS_TMP);
-      emit_fai(as, PPCI_STFD, tmp, RID_SP, SPOFS_TMP);
+      /* Direct FPR->GPR move (mfvsrd) of the full doubleword, instead of the
+      ** STFD+LD stack round-trip. Execution order (reverse): FCTIDZ; MFVSRD.
+      ** mfvsrd: source VSR in the RT field, dest GPR in the RA field. */
+      emit_tab(as, PPCI_MFVSRD, tmp & 31, dest, 0);
       emit_fb(as, PPCI_FCTIDZ, tmp, left);
     } else {
       Reg left = ra_alloc1(as, lref, RSET_FPR);
       Reg tmp = ra_scratch(as, rset_exclude(RSET_FPR, left));
       Reg dest = ra_dest(as, ir, RSET_GPR);
       lj_assertA(!irt_isu32(ir->t), "bad CONV u32.fp emitted");
-      emit_tai(as, PPCI_LWZ, dest, RID_SP, SPOFS_TMPLO);
-      emit_fai(as, PPCI_STFD, tmp, RID_SP, SPOFS_TMP);
+      /* FCTIWZ puts the int32 in the low 32 bits of the FPR (high bits
+      ** undefined). Direct mfvsrd then clrldi to zero-extend, matching the old
+      ** LWZ-from-low-word. Execution order (reverse): FCTIWZ; MFVSRD; clrldi. */
+      emit_rotdi(as, PPCI_RLDICL, dest, dest, 0, 32);  /* clrldi: zero-ext low 32. */
+      emit_tab(as, PPCI_MFVSRD, tmp & 31, dest, 0);
       emit_fb(as, PPCI_FCTIWZ, tmp, left);
     }
   } else
