@@ -129,6 +129,15 @@ static int emit_kdelta1(ASMState *as, Reg rd, int32_t i)
   return 0;  /* Failed. */
 }
 
+#if LJ_ARCH_VERSION >= 100
+/* POWER10: load a 32-bit constant (sign-extended) with a single prefixed pli. */
+static void emit_pli(ASMState *as, Reg r, int32_t i)
+{
+  emit_prefixed(as, PPCI_PLI | (((uint32_t)i >> 16) & 0x3ffff),
+		PPCI_PADDI_SUFFIX | PPCF_T(r) | ((uint32_t)i & 0xffff));
+}
+#endif
+
 /* Load a 32 bit constant into a GPR. */
 static void emit_loadi(ASMState *as, Reg r, int32_t i)
 {
@@ -143,9 +152,18 @@ static void emit_loadi(ASMState *as, Reg r, int32_t i)
       } else if (emit_kdelta1(as, r, i)) {
 	return;
       }
+#if LJ_ARCH_VERSION >= 100
+      emit_pli(as, r, i);		/* POWER10: one pli vs lis+ori. */
+      return;
+#else
       emit_asi(as, PPCI_ORI, r, r, i);
+#endif
     }
+#if LJ_ARCH_VERSION >= 100
+    emit_pli(as, r, i);			/* POWER10: lis-only case -> one pli too. */
+#else
     emit_ti(as, PPCI_LIS, r, (i >> 16));
+#endif
   }
 }
 
@@ -166,7 +184,9 @@ static void emit_loadu64(ASMState *as, Reg r, uint64_t u64)
       if (lo & 0xffff0000u)
 	emit_asi(as, PPCI_ORIS, r, r, (lo >> 16) & 0xffff);
       emit_sldi(as, r, r, 32);
-      emit_loadi(as, r, (int32_t)(u64 >> 32));  /* hi32; high bits masked off. */
+      /* hi32 into r (low 32 bits used; the sldi above shifts it up). On P10
+      ** emit_loadi already uses a single pli here. */
+      emit_loadi(as, r, (int32_t)(u64 >> 32));
     }
   }
 }
