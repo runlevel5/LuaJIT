@@ -277,7 +277,7 @@ mix (ppc64 vs arm64):
 | # | opportunity | evidence | est. win | effort | status |
 |---|-------------|----------|----------|--------|--------|
 | 1 | **FP<->int direct GPR<->FPR moves** (mtvsrd/mfvsrd vs stack round-trip) | conv-dependent chain P9 3.39->3.05s (~10%), P10 1.24->1.18s (~5%); ray ~3%, pidigits ~10% | 3-10% on conv-heavy, neutral else | low | **DONE (98f04781)** |
-| 2 | C-call TOC save/restore (`std/ld r2,24`) skip for same-module calls | call-heavy trace: std/ld r2 ~9% of trace instrs; but C-call body dominates wall-clock | ~1-3% on call-heavy only | med (same-module detection + bl-range check; correctness-sensitive) | candidate |
+| 2 | C-call TOC save/restore (`std/ld r2,24`) skip for same-module calls | MEASURED: NOT on critical path (see below) | **~0% (measured)** | med, correctness-sensitive | **REJECTED — not worth it** |
 | 3 | GC64 pointer-untag density (`rldicl ,0,17` per GCRef) | 621 mask/shift instrs in fannkuch (vs arm64 122) | unknown; likely small (cheap ops, OoO-hidden) | high (needs fold into addressing or redundant-mask elimination; ppc has no masked-load) | investigate, likely low ROI |
 | 4 | const materialization lis+ori (2 instr) | 309 in fannkuch | ~0 wall-clock (P10 pli proved neutral; OoO-hidden) | n/a | NOT worth it (proven neutral) |
 | 5 | spill behavior / dispatch / snapshot overhead | not yet measured | unknown | - | not investigated |
@@ -285,9 +285,36 @@ mix (ppc64 vs arm64):
 HONEST META-FINDING: on these wide OoO POWER9/10 cores, instruction-count
 reductions rarely move wall-clock unless the removed work is on a tight
 dependency chain (which is why #1 wins on dependent conv chains but is neutral
-when conversions parallelize). #2 is the next-best concrete candidate but its
-win is bounded by the C-call body cost. #3/#4 are large instruction-count gaps
-but the ops are cheap and OoO-hidden, so likely low ROI -- would need profiling
-evidence of a real stall before implementing. Recommend: ship #1 (done), then
-evaluate #2 with a same-module-call fast path IF call-heavy workloads matter;
-treat #3/#4 as "measure before touching."
+when conversions parallelize). #3/#4 are large instruction-count gaps but the
+ops are cheap and OoO-hidden, so likely low ROI.
+
+### #2 C-call TOC save/restore — MEASURED, REJECTED (2026-06-29)
+Measured-first (per the dep-chain meta-finding, since `ld r2` could sit on the
+call's dependency chain). Helper-call-heavy DEPENDENT benchmark (/tmp/callchain.lua:
+a tight loop, each iter dependent, 14 IRCALL helpers/trace -- lj_vm_modi x2 +
+lj_str_* chain; confirmed `bctrl; ld r2,24(sp)` is in the hot trace right on the
+call return). Upper-bound measurement -- temporarily removed the `ld r2` (and then
+BOTH `std r2`+`ld r2`) from emit_call and timed:
+| build | POWER9 | POWER10 |
+|-------|--------|---------|
+| baseline (TOC dance) | 0.276s | 0.210s |
+| no `ld r2` | 0.276s | -- |
+| no `std`+no `ld r2` | 0.275s | 0.210s |
+=> **REMOVING THE TOC SAVE/RESTORE ENTIRELY GIVES ~0 WALL-CLOCK** on both cores.
+The C-call body (helper execution + indirect `bctrl` branch + return) dominates;
+the `std/ld r2` stack accesses are fully hidden by OoO + the call latency. The
+`ld r2` is NOT on the critical path. So even the upper bound isn't worth the
+implementation -- and it's the PLT-fault bug class (skipping for a constant-addr
+CALLX, which shares emit_call with IRCALL, would corrupt r2). REJECTED: not
+implemented. (Measurement hack reverted; tree clean.)
+
+### Perf-phase recommendation: WRAP
+With #1 (FP<->int, the one real win) shipped and #2 measured-and-rejected, and
+#3/#4 being OoO-hidden instruction-count gaps with no evidence of a real stall,
+there is no remaining high-ROI baseline-codegen win identified. The wide OoO
+POWER9/10 cores hide nearly all instruction-count reductions; only tight
+dependency-chain stalls (like the FP<->int stack round-trip) move wall-clock.
+RECOMMENDATION: wrap the optimization phase. Further codegen work should be
+strictly profile-driven (find an actual stall first), not instruction-count-driven.
+The port is correctness-complete + fuzzer-clean; the perf phase delivered the
+ISA-gating/cross-build-validation methodology + one real conversion win.
