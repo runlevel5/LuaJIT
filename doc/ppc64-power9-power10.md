@@ -308,6 +308,75 @@ implementation -- and it's the PLT-fault bug class (skipping for a constant-addr
 CALLX, which shares emit_call with IRCALL, would corrupt r2). REJECTED: not
 implemented. (Measurement hack reverted; tree clean.)
 
+---
+
+## openresty/luajit2-test-suite run (2026-07-02, ppc64le LE, HEAD 3687f0f6)
+
+Suite: https://github.com/openresty/luajit2-test-suite  
+Box: power9 LE host, gcc 16.1.1, LuaJIT installed via `make install PREFIX=~/lj-prefix`.  
+Run: `perl run-tests ~/lj-prefix ~/lj-prefix/bin/luajit gcc g++`  
+Result: **12 failures** — 4 noise, 8 real ppc64-specific bugs (confirmed by arm64 cross-check).
+
+### Noise (not ppc64 bugs)
+
+| Test | Reason |
+|---|---|
+| `misc/hstore_elimination.lua` | Requires `table.clone` — OpenResty extension, not in vanilla LuaJIT |
+| `misc/libfuncs.lua` | Expects no `bit`/`jit` in default global list — OpenResty-specific |
+| `sysdep/ffi_include_gtk.lua` | gtk+ headers not installed on headless box |
+| `sysdep/ffi_include_std.lua` | gcc-16 `stddef.h` uses `__typeof__` — LuaJIT C parser upstream limitation |
+
+Parallel build race note: `make -j4` fails (buildvm-generated headers vs .o race in
+FreeBSD/older gmake); use `make -j1` or `make -j2` for reliable builds.
+
+### Real ppc64-specific failures (all pass on arm64)
+
+**JIT crash (SIGSEGV, joff passes):**
+
+- `unportable/math_special.lua` — JIT crashes (signal 11) on `x^y` / math operations
+  with special float inputs (`-0`, `±inf`, `nan`). joff passes cleanly. Clear JIT codegen
+  bug in the float-special-value path (power instruction or snap/exit handling).
+
+**FFI ABI failures (both jit and joff):**
+
+- `ffi/ffi_call.lua:132` — `call_ff_cf` (`complex float` argument passing): assertion
+  fails. ppc64 ELFv2 `_Complex float` argument ABI not handled.
+- `ffi/ffi_callback.lua:40` — `float (double, float, double)` FFI callback: assertion
+  fails. Mixed float/double callback ABI on ppc64.
+- `ffi/ffi_jit_call.lua:69` — JIT path: `call_ij(int, int64)` assertion fails at line 69;
+  joff fails differently (line 105, "attempt to call a boolean value"), indicating two
+  distinct code paths each have ABI issues.
+- `ffi/ffi_convert.lua`, `ffi/ffi_jit_conv.lua` — require `ctest.so` (clib); failed in
+  test runner (exit 1); needs further investigation with proper `LUA_CPATH` env.
+
+**FFI metatype / upvalue bug (both jit and joff):**
+
+- `ffi/ffi_metatype.lua:109` — `ffi.metatype` returns ctype correctly (confirmed:
+  `type(tp)=="cdata"`, `tostring(tp)=="ctype<struct 103>"`), but inside the `__add`
+  metamethod, accessing `tp` as a closed upvalue yields a number ("attempt to call a
+  number value"). arm64 passes. Likely a GC64 upvalue / UREFC truncation bug for
+  ctype values (similar class as the prior `bit.lua` UREFC i32ptr bug, but in the
+  interpreter path for ctype TValues).
+
+**C library / FFI namespace:**
+
+- `misc/num_int.lua:52` — `C.inet_pton` seen as `cdata<int ()>` (plain function
+  pointer, not callable? or wrong ABI convention). arm64 passes. Possible ppc64-specific
+  `ffi.C` symbol resolution or cdata function-call dispatch issue.
+
+### Summary
+
+8 real bugs remain to fix before the test suite is clean:
+1. **JIT crash on float specials** (`math_special`) — JIT only
+2. **`_Complex float` call ABI** (`ffi_call`) — interp + JIT
+3. **Mixed float/double callback ABI** (`ffi_callback`) — interp + JIT
+4. **`call_ij` int64 JIT path** (`ffi_jit_call`) — JIT + interp diverge
+5. **ctype upvalue UREFC truncation** (`ffi_metatype`) — interp + JIT
+6. **`ffi.C` function dispatch** (`num_int`) — interp + JIT
+7–8. `ffi_convert` / `ffi_jit_conv` — pending `LUA_CPATH` investigation
+
+---
+
 ### Perf-phase recommendation: WRAP
 With #1 (FP<->int, the one real win) shipped and #2 measured-and-rejected, and
 #3/#4 being OoO-hidden instruction-count gaps with no evidence of a real stall,
